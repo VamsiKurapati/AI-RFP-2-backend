@@ -1,0 +1,31 @@
+{
+    "version": 2,
+    "builds": [
+        {
+            "src": "./index.js",
+            "use": "@vercel/node",
+            "config": {
+                "installCommand": "npm install"
+            }
+        }
+    ],
+    "routes": [
+        {
+            "src": "/(.*)",
+            "dest": "/"
+        }
+    ],
+    "regions": [
+        "iad1"
+    ],
+    "env": {
+        "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true",
+        "NODE_ENV": "production",
+        "CHROMIUM_PATH": "/tmp/chromium"
+    },
+    "build": {
+        "env": {
+            "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
+        }
+    }
+}
