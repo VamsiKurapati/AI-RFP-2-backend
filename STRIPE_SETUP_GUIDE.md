@@ -219,6 +219,10 @@ http://localhost:YOUR_PORT/admin/webhook
    - `invoice.payment_failed`
    - `invoice.payment_action_required`
 
+   **Price Events (for automatic price synchronization):**
+   - `price.created`
+   - `price.updated`
+
    **How to select:**
    - Click **"Select events"**
    - Choose **"Select events to listen to"**

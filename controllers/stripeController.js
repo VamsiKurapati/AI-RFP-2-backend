@@ -1027,6 +1027,91 @@ const handleSubscriptionWebhook = async (event) => {
     }
 };
 
+// Handle price update/creation events from Stripe
+// Note: In Stripe, you cannot change the amount of an existing price.
+// When updating a price amount, you must create a new price and update the plan's price ID.
+// This handler will sync price changes when prices are updated or newly created.
+const handlePriceUpdate = async (price, eventType = 'updated') => {
+    try {
+        const priceId = price.id;
+        const newPriceAmount = price.unit_amount ? price.unit_amount / 100 : null; // Convert from cents to dollars
+
+        if (newPriceAmount === null) {
+            console.log(`Price ${priceId} has no unit_amount, skipping sync`);
+            return { success: false, message: 'Price has no unit_amount' };
+        }
+
+        console.log(`Processing price ${eventType} for price ID: ${priceId}, amount: $${newPriceAmount}`);
+
+        // Find subscription plan that uses this price ID
+        const plan = await SubscriptionPlan.findOne({
+            $or: [
+                { monthlyPriceId: priceId },
+                { yearlyPriceId: priceId }
+            ]
+        });
+
+        if (!plan) {
+            console.log(`No subscription plan found for price ID: ${priceId}. This may be a new price that needs to be linked to a plan.`);
+            return {
+                success: false,
+                message: 'No subscription plan found for this price ID. Please link the price ID to a subscription plan in the database.'
+            };
+        }
+
+        // Determine if this is a monthly or yearly price
+        const updateData = {};
+        let priceType = '';
+        const oldPrice = plan.monthlyPriceId === priceId ? plan.monthlyPrice : plan.yearlyPrice;
+
+        if (plan.monthlyPriceId === priceId) {
+            updateData.monthlyPrice = newPriceAmount;
+            priceType = 'monthly';
+        } else if (plan.yearlyPriceId === priceId) {
+            updateData.yearlyPrice = newPriceAmount;
+            priceType = 'yearly';
+        }
+
+        // Only update if price has changed
+        if (oldPrice === newPriceAmount) {
+            console.log(`Price for plan "${plan.name}" (${priceType}) is already $${newPriceAmount}, no update needed`);
+            return {
+                success: true,
+                message: 'Price already synchronized',
+                planName: plan.name,
+                priceType,
+                price: newPriceAmount
+            };
+        }
+
+        // Update the plan in database
+        await SubscriptionPlan.findByIdAndUpdate(plan._id, updateData);
+
+        console.log(`Successfully ${eventType === 'created' ? 'synced' : 'updated'} ${priceType} price for plan "${plan.name}" from $${oldPrice} to $${newPriceAmount}`);
+
+        // Create notification
+        const notification = new Notification({
+            type: "Price Update",
+            title: `Price ${eventType === 'created' ? 'synced' : 'updated'}`,
+            description: `Price for plan "${plan.name}" (${priceType}) has been ${eventType === 'created' ? 'synced' : 'updated'} to $${newPriceAmount} in Stripe and synchronized to database.`,
+            created_at: new Date(),
+        });
+        await notification.save();
+
+        return {
+            success: true,
+            message: `Price ${eventType === 'created' ? 'synced' : 'updated'} for plan "${plan.name}"`,
+            planName: plan.name,
+            priceType,
+            oldPrice,
+            newPrice: newPriceAmount
+        };
+    } catch (error) {
+        console.error('Error handling price update:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     createPaymentIntent,
     activateSubscription,
@@ -1034,5 +1119,6 @@ module.exports = {
     getRefundStatus,
     syncPricesFromStripe,
     handleSubscriptionWebhook,
-    activateSubscriptionFromStripe
+    activateSubscriptionFromStripe,
+    handlePriceUpdate
 };

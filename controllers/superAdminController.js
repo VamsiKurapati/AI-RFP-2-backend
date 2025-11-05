@@ -965,18 +965,21 @@ const handleEnterpriseCheckoutSessionFailed = async (session) => {
 };
 
 exports.handleWebhook = async (req, res) => {
+  console.log('Webhook received');
   const sig = req.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   let event;
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    console.log('Event:', event);
   } catch (err) {
     console.error('Error in handleWebhook:', err);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   const session = event.data.object;
+  console.log('Session:', session);
   const { handleSubscriptionWebhook } = require('./stripeController');
 
   try {
@@ -984,24 +987,30 @@ exports.handleWebhook = async (req, res) => {
       case 'checkout.session.completed':
         // Check if it's a subscription checkout or enterprise checkout
         if (session.mode === 'subscription') {
+          console.log('Subscription mode');
           await handleSubscriptionWebhook(event);
         } else {
+          console.log('Enterprise mode');
           await handleEnterpriseCheckoutSessionCompleted(session);
         }
         break;
 
       case 'checkout.session.expired':
+        console.log('Checkout session expired');
         await handleEnterpriseCheckoutSessionFailed(session);
         break;
 
       case 'checkout.session.async_payment_failed':
+        console.log('Checkout session async payment failed');
         await handleEnterpriseCheckoutSessionFailed(session);
         break;
 
       case 'checkout.session.async_payment_succeeded':
         if (session.mode === 'subscription') {
+          console.log('Subscription mode');
           await handleSubscriptionWebhook(event);
         } else {
+          console.log('Enterprise mode');
           await handleEnterpriseCheckoutSessionCompleted(session);
         }
         break;
@@ -1013,6 +1022,14 @@ exports.handleWebhook = async (req, res) => {
       case 'customer.subscription.deleted':
         await handleSubscriptionWebhook(event);
         break;
+
+      // Price update events
+      case 'price.updated':
+      case 'price.created': {
+        const { handlePriceUpdate } = require('./stripeController');
+        await handlePriceUpdate(event.data.object, event.type === 'price.created' ? 'created' : 'updated');
+        break;
+      }
 
       default:
         console.log(`Unhandled webhook event type: ${event.type}`);
