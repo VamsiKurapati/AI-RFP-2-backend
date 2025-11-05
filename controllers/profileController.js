@@ -827,7 +827,7 @@ exports.addCaseStudy = [
                 return res.status(400).json({ message: "File size exceeds 5MB limit" });
             }
 
-            const fileUrl = `${process.env.BACKEND_URL || "http://localhost:5000"}/profile/getCaseStudy/${req.file.id}`;
+            const fileUrl = `${process.env.BACKEND_URL}/profile/getCaseStudy/${req.file.id}`;
 
             const companyProfile_1 = await CompanyProfile.findOneAndUpdate(
                 { userId: req.user._id },
@@ -906,7 +906,7 @@ exports.addDocument = [
                 return res.status(400).json({ message: "File size exceeds 5MB limit" });
             }
 
-            const fileUrl = `${process.env.BACKEND_URL || "http://localhost:5000"}/profile/getDocument/${req.file.id}`;
+            const fileUrl = `${process.env.BACKEND_URL}/profile/getDocument/${req.file.id}`;
 
             const buffer = await getFileBufferFromGridFS(req.file.id);
 

@@ -158,6 +158,26 @@ const createPaymentIntent = async (req, res) => {
         }
 
         let stripeCustomerId = user.stripeCustomerId;
+
+        // Verify customer exists in Stripe if we have a customer ID
+        if (stripeCustomerId) {
+            try {
+                // Verify the customer exists in Stripe
+                await stripe.customers.retrieve(stripeCustomerId);
+            } catch (stripeError) {
+                // If customer doesn't exist (404) or is deleted, create a new one
+                if (stripeError.code === 'resource_missing' || stripeError.statusCode === 404) {
+                    console.log(`Customer ${stripeCustomerId} not found in Stripe, creating new customer`);
+                    stripeCustomerId = null; // Reset to create new customer
+                } else {
+                    // For other errors, log and continue to try creating a new customer
+                    console.error('Error verifying Stripe customer:', stripeError.message);
+                    stripeCustomerId = null;
+                }
+            }
+        }
+
+        // Create new customer if we don't have a valid one
         if (!stripeCustomerId) {
             try {
                 // Create Stripe customer
@@ -184,7 +204,7 @@ const createPaymentIntent = async (req, res) => {
         let checkoutSession;
         try {
             // Get the frontend URL from environment or use a default
-            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+            const frontendUrl = process.env.FRONTEND_URL;
 
             checkoutSession = await stripe.checkout.sessions.create({
                 customer: stripeCustomerId,
@@ -404,7 +424,7 @@ const activateSubscription = async (req, res) => {
                         max_rfp_proposal_generations: newMaxRfp, // ✅ directly set new total
                         max_grant_proposal_generations: newMaxGrant, // ✅ directly set new total
                         canceled_at: null,
-                        auto_renewal: false,
+                        auto_renewal: true,
                         stripeSubscriptionId: paymentIntent.id,
                         stripePriceId: paymentIntent.metadata.planPriceId || null
                     }
@@ -1062,14 +1082,19 @@ const handlePriceUpdate = async (price, eventType = 'updated') => {
         // Determine if this is a monthly or yearly price
         const updateData = {};
         let priceType = '';
-        const oldPrice = plan.monthlyPriceId === priceId ? plan.monthlyPrice : plan.yearlyPrice;
+        let oldPriceId = null;
+        let oldPrice = null;
 
         if (plan.monthlyPriceId === priceId) {
             updateData.monthlyPrice = newPriceAmount;
             priceType = 'monthly';
+            oldPriceId = plan.monthlyPriceId;
+            oldPrice = plan.monthlyPrice;
         } else if (plan.yearlyPriceId === priceId) {
             updateData.yearlyPrice = newPriceAmount;
             priceType = 'yearly';
+            oldPriceId = plan.yearlyPriceId;
+            oldPrice = plan.yearlyPrice;
         }
 
         // Only update if price has changed
@@ -1084,16 +1109,70 @@ const handlePriceUpdate = async (price, eventType = 'updated') => {
             };
         }
 
-        // Update the plan in database
+        // Update all active Stripe subscriptions to use the new price BEFORE updating the plan
+        // This ensures customers are charged the latest price on their next renewal
+        let updatedSubscriptions = 0;
+        let subscriptionErrors = [];
+
+        // Only update subscriptions if the price ID actually changed (new price created)
+        if (oldPriceId && oldPriceId !== priceId) {
+            try {
+                // Find all active subscriptions in our database that use this plan
+                const activeSubscriptions = await Subscription.find({
+                    plan_name: plan.name,
+                    canceled_at: null,
+                    stripeSubscriptionId: { $ne: null }
+                });
+
+                for (const dbSubscription of activeSubscriptions) {
+                    try {
+                        // Retrieve the Stripe subscription to check its current price
+                        const stripeSubscription = await stripe.subscriptions.retrieve(dbSubscription.stripeSubscriptionId);
+
+                        // Check if this subscription uses the old price ID
+                        const currentPriceId = stripeSubscription.items.data[0]?.price?.id;
+
+                        // Update subscription if it's using the old price
+                        if (currentPriceId === oldPriceId) {
+                            // Update the subscription to use the new price
+                            await stripe.subscriptions.update(stripeSubscription.id, {
+                                items: [{
+                                    id: stripeSubscription.items.data[0].id,
+                                    price: priceId, // Use the new price ID
+                                }],
+                                proration_behavior: 'none' // Don't prorate, charge new price on next renewal
+                            });
+
+                            // Update our database with the new price ID
+                            await Subscription.findByIdAndUpdate(dbSubscription._id, {
+                                stripePriceId: priceId,
+                                plan_price: newPriceAmount
+                            });
+
+                            updatedSubscriptions++;
+                            console.log(`Updated subscription ${stripeSubscription.id} to use new price ${priceId} ($${oldPrice} -> $${newPriceAmount})`);
+                        }
+                    } catch (subError) {
+                        console.error(`Error updating subscription ${dbSubscription.stripeSubscriptionId}:`, subError.message);
+                        subscriptionErrors.push(`Failed to update subscription ${dbSubscription.stripeSubscriptionId}: ${subError.message}`);
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating subscriptions:', error);
+                subscriptionErrors.push(`Error updating subscriptions: ${error.message}`);
+            }
+        }
+
+        // Update the plan in database AFTER updating subscriptions
         await SubscriptionPlan.findByIdAndUpdate(plan._id, updateData);
 
-        console.log(`Successfully ${eventType === 'created' ? 'synced' : 'updated'} ${priceType} price for plan "${plan.name}" from $${oldPrice} to $${newPriceAmount}`);
+        console.log(`Successfully ${eventType === 'created' ? 'synced' : 'updated'} ${priceType} price for plan "${plan.name}" from $${oldPrice} to $${newPriceAmount}. Updated ${updatedSubscriptions} active subscription(s).`);
 
         // Create notification
         const notification = new Notification({
             type: "Price Update",
             title: `Price ${eventType === 'created' ? 'synced' : 'updated'}`,
-            description: `Price for plan "${plan.name}" (${priceType}) has been ${eventType === 'created' ? 'synced' : 'updated'} to $${newPriceAmount} in Stripe and synchronized to database.`,
+            description: `Price for plan "${plan.name}" (${priceType}) has been ${eventType === 'created' ? 'synced' : 'updated'} to $${newPriceAmount} in Stripe. ${updatedSubscriptions} active subscription(s) updated to use new price on next renewal.`,
             created_at: new Date(),
         });
         await notification.save();
@@ -1104,7 +1183,9 @@ const handlePriceUpdate = async (price, eventType = 'updated') => {
             planName: plan.name,
             priceType,
             oldPrice,
-            newPrice: newPriceAmount
+            newPrice: newPriceAmount,
+            updatedSubscriptions,
+            subscriptionErrors: subscriptionErrors.length > 0 ? subscriptionErrors : undefined
         };
     } catch (error) {
         console.error('Error handling price update:', error);
