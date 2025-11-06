@@ -164,20 +164,6 @@ exports.basicComplianceCheckPdf = [
         return res.status(400).json({ message: "No file uploaded" });
       }
 
-      //Check if a proposal already exists for this rfp and user
-      const proposal = await Proposal.findOne({ rfpId: rfpId, companyMail: userEmail });
-
-      if (!proposal) {
-        await deleteGridFSFile(file.id);
-        return res.status(404).json({ message: "Proposal not found" });
-      }
-
-      // Check if no.of attempts is greater than 3
-      if (proposal.noOfAttempts && proposal.noOfAttempts > 3) {
-        await deleteGridFSFile(file.id);
-        return res.status(404).json({ message: "No more attempts allowed" });
-      }
-
       // Validate file type
       const allowedTypes = ['application/pdf'];
       if (!allowedTypes.includes(file.mimetype)) {
@@ -190,6 +176,20 @@ exports.basicComplianceCheckPdf = [
       if (file.size > maxSize) {
         await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "File size exceeds 10MB limit" });
+      }
+
+      //Check if a proposal already exists for this rfp and user
+      const proposal = await Proposal.findOne({ rfpId: rfpId, companyMail: userEmail });
+
+      if (!proposal) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "Proposal not found" });
+      }
+
+      // Check if no.of attempts is greater than 3
+      if (proposal.noOfAttempts && proposal.noOfAttempts <= 0) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "No more attempts allowed" });
       }
 
       const fileBuffer = await getFileBufferFromGridFS(file.id);
@@ -227,7 +227,11 @@ exports.basicComplianceCheckPdf = [
 
       const compliance_data = firstValue["compliance_flags"];
 
+      proposal.noOfAttempts = proposal.noOfAttempts > 0 ? proposal.noOfAttempts - 1 : 0;
+      await proposal.save();
+
       await deleteGridFSFile(file.id);
+
       res.status(200).json(compliance_data);
     } catch (error) {
       await deleteGridFSFile(file.id);
@@ -399,6 +403,20 @@ exports.advancedComplianceCheckPdf = [
         return res.status(400).json({ message: "File size exceeds 10MB limit" });
       }
 
+      //Check if a proposal already exists for this rfp and user
+      const proposal = await Proposal.findOne({ rfpId: rfpId, companyMail: userEmail });
+
+      if (!proposal) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "Proposal not found" });
+      }
+
+      // Check if no.of attempts is greater than 3
+      if (proposal.noOfAttempts && proposal.noOfAttempts <= 0) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "No more attempts allowed" });
+      }
+
       const fileBuffer = await getFileBufferFromGridFS(file.id);
 
       // Create abort controller for proper cleanup
@@ -499,6 +517,11 @@ exports.advancedComplianceCheckPdf = [
       const dataAdvancedCompliance = resProposal.data.report;
 
       const rfpTitle = rfp.title;
+
+      proposal.noOfAttempts = proposal.noOfAttempts > 0 ? proposal.noOfAttempts - 1 : 0;
+      await proposal.save();
+
+      await deleteGridFSFile(file.id);
 
       res.status(200).json({ compliance_dataBasicCompliance, dataAdvancedCompliance, rfpTitle });
 
