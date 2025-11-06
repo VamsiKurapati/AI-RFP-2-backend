@@ -500,8 +500,17 @@ exports.sendDataForProposalGeneration = async (req, res) => {
           session.startTransaction();
 
           try {
+            const current_subscription = await Subscription.findOne({ user_id: userId });
+            if (!current_subscription) {
+              await session.abortTransaction();
+              return res.status(400).json({ error: 'Subscription not found' });
+            }
+
+            let noOfAttempts = current_subscription.plan_name === "Free" ? 0 : current_subscription.plan_name === "Basic" ? 2 : ["Pro", "Enterprise", "Custom Enterprise Plan"].includes(current_subscription.plan_name) ? 3 : 0;
+
             const new_Proposal = new Proposal({
               rfpId: proposal._id || "",
+              noOfAttempts: noOfAttempts,
               title: proposal.title || "",
               client: proposal.organization || "Not found",
               initialProposal: data,
@@ -1894,8 +1903,18 @@ exports.getRFPProposal = async (req, res) => {
 
           const currentEditor = new_Draft.currentEditor ? new_Draft.currentEditor : req.user._id;
 
+          const current_subscription = await Subscription.findOne({ user_id: userId });
+
+          if (!current_subscription) {
+            await session.abortTransaction();
+            return res.status(400).json({ error: 'Subscription not found' });
+          }
+
+          let noOfAttempts = current_subscription.plan_name === "Free" ? 0 : current_subscription.plan_name === "Basic" ? 2 : ["Pro", "Enterprise", "Custom Enterprise Plan"].includes(current_subscription.plan_name) ? 3 : 0;
+
           const new_prop = new Proposal({
             rfpId: proposal.rfpId,
+            noOfAttempts: noOfAttempts,
             initialProposal: data,
             generatedProposal: data,
             docx_base64: document,

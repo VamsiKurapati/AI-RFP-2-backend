@@ -15,6 +15,7 @@ const { decompress } = require('../utils/decompress');
 const { convertPdfToJsonFile } = require('../utils/pdfToJsonConverter');
 const { GridFsStorage } = require("multer-gridfs-storage");
 const multer = require("multer");
+const { deleteGridFSFile } = require('../utils/fileCleanup');
 
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
@@ -106,9 +107,26 @@ exports.basicComplianceCheckPdf = [
   async (req, res) => {
     try {
       const { file } = req;
+      const { rfpId } = req.body;
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      if (!rfpId) {
+        await deleteGridFSFile(file.id);
+        return res.status(400).json({ message: "rfpId is required" });
+      }
+
+      // Validate ObjectId format
+      if (!mongoose.Types.ObjectId.isValid(rfpId)) {
+        await deleteGridFSFile(file.id);
+        return res.status(400).json({ message: "Invalid RFP ID format" });
+      }
 
       // Validate user exists
       if (!req.user) {
+        await deleteGridFSFile(file.id);
         return res.status(401).json({ message: "User not authenticated" });
       }
 
@@ -117,11 +135,13 @@ exports.basicComplianceCheckPdf = [
       if (req.user.role === "employee") {
         const employeeProfile = await EmployeeProfile.findOne({ userId: req.user._id });
         if (!employeeProfile) {
+          await deleteGridFSFile(file.id);
           return res.status(404).json({ message: "Employee profile not found" });
         }
         userEmail = employeeProfile.companyMail;
         const companyProfile = await CompanyProfile.findOne({ email: userEmail });
         if (!companyProfile) {
+          await deleteGridFSFile(file.id);
           return res.status(404).json({ message: "Company profile not found" });
         }
         userId = companyProfile.userId;
@@ -130,26 +150,45 @@ exports.basicComplianceCheckPdf = [
       //check for active subscription
       const subscription = await Subscription.findOne({ user_id: userId });
       if (!subscription || subscription.end_date < new Date()) {
+        await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "Subscription not found or expired" });
       }
 
       if (subscription && subscription.plan_name === "Free") {
+        await deleteGridFSFile(file.id);
         return res.status(200).json({ message: 'You are using the free plan. Please upgrade to a paid plan to continue using basic compliance check.' });
       }
 
       if (!file) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      //Check if a proposal already exists for this rfp and user
+      const proposal = await Proposal.findOne({ rfpId: rfpId, companyMail: userEmail });
+
+      if (!proposal) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "Proposal not found" });
+      }
+
+      // Check if no.of attempts is greater than 3
+      if (proposal.noOfAttempts && proposal.noOfAttempts > 3) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "No more attempts allowed" });
       }
 
       // Validate file type
       const allowedTypes = ['application/pdf'];
       if (!allowedTypes.includes(file.mimetype)) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "Invalid file type. Only PDF files are allowed." });
       }
 
       // Validate file size (10MB limit)
       const maxSize = 10 * 1024 * 1024; // 10MB
       if (file.size > maxSize) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "File size exceeds 10MB limit" });
       }
 
@@ -163,6 +202,7 @@ exports.basicComplianceCheckPdf = [
         jsonData = JSON.parse(jsonString);
       } catch (parseError) {
         errorData.data = jsonString;
+        await deleteGridFSFile(file.id);
         return res.status(500).json({
           message: "Failed to parse extracted JSON data",
           error: parseError.message,
@@ -187,8 +227,10 @@ exports.basicComplianceCheckPdf = [
 
       const compliance_data = firstValue["compliance_flags"];
 
+      await deleteGridFSFile(file.id);
       res.status(200).json(compliance_data);
     } catch (error) {
+      await deleteGridFSFile(file.id);
       res.status(500).json({ message: error.message, data: errorData });
     }
   }
@@ -286,16 +328,19 @@ exports.advancedComplianceCheckPdf = [
 
       // Input validation
       if (!rfpId) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "rfpId is required" });
       }
 
       // Validate ObjectId format
       if (!mongoose.Types.ObjectId.isValid(rfpId)) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "Invalid RFP ID format" });
       }
 
       // Validate user exists
       if (!req.user) {
+        await deleteGridFSFile(file.id);
         return res.status(401).json({ message: "User not authenticated" });
       }
 
@@ -305,11 +350,13 @@ exports.advancedComplianceCheckPdf = [
       if (req.user.role === "employee") {
         const employeeProfile = await EmployeeProfile.findOne({ userId: req.user._id });
         if (!employeeProfile) {
+          await deleteGridFSFile(file.id);
           return res.status(404).json({ message: "Employee profile not found" });
         }
         userEmail = employeeProfile.companyMail;
         const companyProfile = await CompanyProfile.findOne({ email: userEmail });
         if (!companyProfile) {
+          await deleteGridFSFile(file.id);
           return res.status(404).json({ message: "Company profile not found" });
         }
         userId = companyProfile.userId;
@@ -318,31 +365,37 @@ exports.advancedComplianceCheckPdf = [
       //check for active subscription
       const subscription = await Subscription.findOne({ user_id: userId });
       if (!subscription || subscription.end_date < new Date()) {
+        await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "Subscription not found or expired" });
       }
 
       if (subscription && subscription.plan_name === "Free") {
+        await deleteGridFSFile(file.id);
         return res.status(200).json({ message: 'You are using the free plan. Please upgrade to a paid plan to continue using advanced compliance check.' });
       }
 
       //check if subscription is pro or enterprise or custom
       if (subscription.plan_name !== "Pro" && subscription.plan_name !== "Enterprise" && subscription.plan_name !== "Custom Enterprise Plan") {
+        await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "You are not authorized to use this feature" });
       }
 
       if (!file) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "No file uploaded" });
       }
 
       // Validate file type
       const allowedTypes = ['application/pdf'];
       if (!allowedTypes.includes(file.mimetype)) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "Invalid file type. Only PDF files are allowed." });
       }
 
       // Validate file size (10MB limit)
       const maxSize = 10 * 1024 * 1024; // 10MB
       if (file.size > maxSize) {
+        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "File size exceeds 10MB limit" });
       }
 
@@ -370,6 +423,7 @@ exports.advancedComplianceCheckPdf = [
         jsonData = JSON.parse(jsonString);
       } catch (parseError) {
         errorData.data = jsonString;
+        await deleteGridFSFile(file.id);
         return res.status(500).json({
           message: "Failed to parse extracted JSON data",
           error: parseError.message,
@@ -412,6 +466,7 @@ exports.advancedComplianceCheckPdf = [
       }
 
       if (!rfp) {
+        await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "RFP not found" });
       }
 
@@ -455,6 +510,7 @@ exports.advancedComplianceCheckPdf = [
 
       // Handle specific timeout errors
       if (error.message.includes('timed out') || error.message.includes('aborted')) {
+        await deleteGridFSFile(file.id);
         return res.status(408).json({
           message: 'Request timeout - PDF processing is taking longer than expected. Please try again or contact support if the issue persists.',
           error: error.message,
@@ -464,6 +520,7 @@ exports.advancedComplianceCheckPdf = [
 
       // Handle OpenAI API errors
       if (error.message.includes('OpenAI')) {
+        await deleteGridFSFile(file.id);
         return res.status(503).json({
           message: 'AI service temporarily unavailable. Please try again in a few moments.',
           error: error.message,
@@ -471,6 +528,7 @@ exports.advancedComplianceCheckPdf = [
         });
       }
 
+      await deleteGridFSFile(file.id);
       res.status(500).json({ message: error.message, data: errorData });
     }
   }
@@ -491,7 +549,8 @@ exports.generatePDF = async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="proposal.pdf"');
     res.status(200).send(pdf.data);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    await deleteGridFSFile(file.id);
+    res.status(500).json({ message: error.message, data: errorData });
   }
 };
 

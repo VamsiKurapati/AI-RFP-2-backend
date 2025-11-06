@@ -13,6 +13,7 @@ const ProposalSchema = new mongoose.Schema({
   url: { type: String, required: false, default: "" },
   status: { type: String, required: true },
   submittedAt: { type: Date, default: Date.now },
+  noOfAttempts: { type: Number, default: 0 },
   currentEditor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, default: null },
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null },
