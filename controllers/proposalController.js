@@ -187,7 +187,7 @@ exports.basicComplianceCheckPdf = [
       }
 
       // Check if no.of attempts is greater than 3
-      if (proposal.noOfAttempts && proposal.noOfAttempts <= 0) {
+      if (proposal && proposal.noOfAttempts <= 0) {
         await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "No more attempts allowed" });
       }
@@ -412,7 +412,7 @@ exports.advancedComplianceCheckPdf = [
       }
 
       // Check if no.of attempts is greater than 3
-      if (proposal.noOfAttempts && proposal.noOfAttempts <= 0) {
+      if (proposal && proposal.noOfAttempts <= 0) {
         await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "No more attempts allowed" });
       }
