@@ -285,12 +285,15 @@ exports.fetchRFPs = async () => {
                     budget: rfp.budget,
                     deadline: rfp.deadline,
                     organization: rfp.organization,
-                    fundingType: rfp.fundingType,
                     organizationType: rfp.organizationType,
                     link: rfp.link,
                     contact: rfp.contact,
-                    timeline: rfp.timeline,
                     solicitationNumber: rfp.solicitation_number,
+                    office: rfp.office,
+                    issuingOffice: rfp.issuingOffice,
+                    country: rfp.country,
+                    state: rfp.state,
+                    docsLink: rfp.rfpmart_doc_link,
                 });
             } else {
                 await RFP.create({
@@ -302,11 +305,14 @@ exports.fetchRFPs = async () => {
                     budget: rfp.budget,
                     deadline: rfp.deadline,
                     organization: rfp.organization,
-                    fundingType: rfp.fundingType,
                     organizationType: rfp.organizationType,
                     link: rfp.link,
                     contact: rfp.contact,
-                    timeline: rfp.timeline,
+                    office: rfp.office,
+                    issuingOffice: rfp.issuingOffice,
+                    country: rfp.country,
+                    state: rfp.state,
+                    docsLink: rfp.rfpmart_doc_link,
                     solicitationNumber: rfp.solicitation_number,
                 });
             }

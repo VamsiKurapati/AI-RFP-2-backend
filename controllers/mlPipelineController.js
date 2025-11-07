@@ -188,7 +188,7 @@ exports.getOtherRFPs = async (req, res) => {
 
     const industries = req.body.industries;
 
-    const otherRFPs = await RFP.find({ setAside: { $in: industries } }).lean();
+    const otherRFPs = await RFP.find({ baseType: { $in: industries } }).lean();
 
     const rfpIds = otherRFPs.map(r => r._id);
 

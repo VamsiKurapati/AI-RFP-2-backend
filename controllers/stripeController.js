@@ -923,7 +923,80 @@ const activateSubscriptionFromStripe = async (stripeSubscription, invoice = null
 
             return { success: true, subscription: dbSubscription };
         } catch (error) {
+            // Abort database transaction
             await session.abortTransaction();
+
+            // Initiate automatic refund if invoice/payment exists
+            if (invoice) {
+                try {
+                    const paymentIntentId = invoice.payment_intent || invoice.id;
+                    const refundAmount = invoice.amount_paid || invoice.amount_due || (planPrice * 100); // Amount in cents
+
+                    // Check if payment was actually made (not just an invoice)
+                    if (invoice.status === 'paid' && paymentIntentId) {
+                        const refund = await stripe.refunds.create({
+                            payment_intent: paymentIntentId,
+                            reason: 'requested_by_customer',
+                            metadata: {
+                                reason: 'database_transaction_failed',
+                                userId: userId.toString(),
+                                planId: planId.toString(),
+                                subscriptionId: subscription.id,
+                                error: error.message
+                            }
+                        });
+
+                        // Create failed payment record with refund info (outside transaction)
+                        await Payment.create({
+                            user_id: userId,
+                            subscription_id: null,
+                            price: planPrice,
+                            status: 'Pending Refund',
+                            paid_at: new Date(),
+                            transaction_id: paymentIntentId,
+                            refund_id: refund.id,
+                            companyName: user.fullName || user.email,
+                            payment_method: 'stripe',
+                            failure_reason: `Database transaction failed: ${error.message}`
+                        });
+
+                        console.log(`Refund initiated for subscription activation failure: ${refund.id}`);
+
+                        // Send refund notification email
+                        try {
+                            const { subject, body } = await emailTemplates.getRefundNotificationEmail(
+                                user.fullName || user.email,
+                                plan.name,
+                                refund.id,
+                                `Database transaction failed during subscription activation: ${error.message}`
+                            );
+                            await sendEmail(user.email, subject, body);
+                        } catch (emailError) {
+                            console.error('Failed to send refund notification email:', emailError);
+                        }
+                    }
+                } catch (refundError) {
+                    console.error('Failed to process refund after transaction failure:', refundError);
+
+                    // Create payment record indicating refund failure (outside transaction)
+                    try {
+                        await Payment.create({
+                            user_id: userId,
+                            subscription_id: null,
+                            price: planPrice,
+                            status: 'Failed - Refund Required',
+                            paid_at: new Date(),
+                            transaction_id: invoice.payment_intent || invoice.id,
+                            companyName: user.fullName || user.email,
+                            payment_method: 'stripe',
+                            failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
+                        });
+                    } catch (paymentRecordError) {
+                        console.error('Failed to create payment record:', paymentRecordError);
+                    }
+                }
+            }
+
             throw error;
         } finally {
             session.endSession();
