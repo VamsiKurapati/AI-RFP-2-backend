@@ -290,11 +290,17 @@ exports.saveRFP = async (req, res) => {
       budget: rfp.budget,
       deadline: getDeadline(rfp.deadline),
       organization: rfp.organization,
-      fundingType: rfp.fundingType,
       organizationType: rfp.organizationType,
       link: rfp.link,
       contact: rfp.contact,
-      timeline: rfp.timeline,
+      docsLink: rfp.docsLink,
+      office: rfp.office,
+      issuingOffice: rfp.issuingOffice,
+      country: rfp.country,
+      state: rfp.state,
+      baseType: rfp.baseType,
+      setAside: rfp.setAside,
+      solicitationNumber: rfp.solicitationNumber,
     };
 
     const newSave = await SavedRFP.create({ userEmail, rfpId, rfp: cleanRFP });
@@ -434,7 +440,14 @@ exports.sendDataForProposalGeneration = async (req, res) => {
       "Industry": `${proposal.organizationType || ""}`,
       "URL": `${proposal.link || ""}`,
       "Contact Information": `${proposal.contact || ""}`,
-      "Timeline": `${proposal.timeline || ""}`,
+      "Document Link": `${proposal.docsLink || ""}`,
+      "Office": `${proposal.office || ""}`,
+      "Issuing Office": `${proposal.issuingOffice || ""}`,
+      "Country": `${proposal.country || ""}`,
+      "State": `${proposal.state || ""}`,
+      "Base Type": `${proposal.baseType || ""}`,
+      "Set Aside": `${proposal.setAside || ""}`,
+      "Solicitation Number": `${proposal.solicitationNumber || ""}`,
     };
 
     const userData = {
@@ -835,7 +848,6 @@ exports.sendDataForRFPDiscovery = async (req, res) => {
           budget: rfp.budget || 'Not found',
           deadline: getDeadline(rfp.deadline),
           organization: rfp.organization || "",
-          fundingType: rfp.fundingType || "Not found",
           organizationType: rfp.organizationType || "",
           baseType: rfp.BaseType || "",
           setAside: rfp.SetASide || "",
@@ -843,7 +855,11 @@ exports.sendDataForRFPDiscovery = async (req, res) => {
           link: rfp.link || "",
           type: 'Matched',
           contact: rfp.contact || "",
-          timeline: rfp.timeline || "",
+          office: rfp.office || "",
+          issuingOffice: rfp.issuingOffice || "",
+          country: rfp.country || "",
+          state: rfp.state || "",
+          docsLink: rfp.docsLink || "",
           email: companyProfile_1.email || ""
         });
       }
@@ -852,7 +868,7 @@ exports.sendDataForRFPDiscovery = async (req, res) => {
     // Validate all required fields
     const requiredFields = [
       'title', 'description', 'logo', 'match', 'budget', 'deadline',
-      'organization', 'fundingType', 'organizationType', 'link', 'type', 'contact', 'timeline', 'baseType', 'setAside', 'solicitationNumber'
+      'organization', 'office', 'issuingOffice', 'country', 'state', 'organizationType', 'link', 'type', 'contact', 'docsLink', 'baseType', 'setAside', 'solicitationNumber', 'email'
     ];
 
     const invalidEntry = transformedData.find(rfp =>
@@ -888,12 +904,15 @@ exports.sendDataForRFPDiscovery = async (req, res) => {
           existingRFP.budget = rfp.budget;
           existingRFP.deadline = rfp.deadline;
           existingRFP.organization = rfp.organization;
-          existingRFP.fundingType = rfp.fundingType;
+          existingRFP.office = rfp.office;
+          existingRFP.issuingOffice = rfp.issuingOffice;
+          existingRFP.country = rfp.country;
+          existingRFP.state = rfp.state;
           existingRFP.organizationType = rfp.organizationType;
           existingRFP.link = rfp.link;
           existingRFP.type = rfp.type;
           existingRFP.contact = rfp.contact;
-          existingRFP.timeline = rfp.timeline;
+          existingRFP.docsLink = rfp.docsLink;
           existingRFP.baseType = rfp.baseType;
           existingRFP.setAside = rfp.setAside;
           existingRFP.solicitationNumber = rfp.solicitationNumber;
@@ -1064,7 +1083,14 @@ exports.handleFileUploadAndSendForRFPExtraction = [
               budget: fields['Budget or Funding Limit'] || 'Not specified',
               deadline: getDeadline(fields['Submission Deadline']) || 'Not specified',
               contact: fields['Contact Information'] || "",
-              timeline: fields['Timeline / Project Schedule'] || "",
+              office: fields['Office'] || "",
+              issuingOffice: fields['Issuing Office'] || "",
+              country: fields['Country'] || "",
+              state: fields['State'] || "",
+              baseType: fields['Base Type'] || "",
+              setAside: fields['Set Aside'] || "",
+              solicitationNumber: fields['Solicitation Number'] || "",
+              docsLink: fields['Document Link'] || "",
               proposalInstructions: fields['Proposal Submission Instructions'] || "",
               projectGoals: fields['Project Goals and Objectives'] || "",
               scopeOfWork: fields['Scope of Work'] || "",
@@ -1084,8 +1110,15 @@ exports.handleFileUploadAndSendForRFPExtraction = [
           link: `${process.env.BACKEND_URL}/profile/getDocument/${req.file.id}`,
           budget: 'Not specified',
           deadline: getDeadline('Not specified'),
-          contact: "",
-          timeline: "",
+          contact: "Unknown",
+          office: "Unknown",
+          issuingOffice: "Unknown",
+          country: "Unknown",
+          state: "Unknown",
+          baseType: "Unknown",
+          setAside: "Unknown",
+          solicitationNumber: "Unknown",
+          docsLink: "Unknown",
           logo: "None"
         };
       }
@@ -1106,13 +1139,20 @@ exports.handleFileUploadAndSendForRFPExtraction = [
         title: rfp.title,
         description: enhancedDescription,
         organization: rfp.organization || "",
+        baseType: rfp.baseType || "",
+        setAside: rfp.setAside || "",
+        solicitationNumber: rfp.solicitationNumber || "",
+        office: rfp.office || "",
+        issuingOffice: rfp.issuingOffice || "",
+        country: rfp.country || "",
+        state: rfp.state || "",
         organizationType: rfp.organizationType || "",
         link: rfp.link || `${process.env.BACKEND_URL}/profile/getDocument/${req.file.id}`,
         email: userEmail,
         budget: rfp.budget || 'Not found',
         deadline: getDeadline(rfp.deadline),
         contact: rfp.contact || "",
-        timeline: rfp.timeline || "",
+        docsLink: rfp.docsLink || "",
         match: 100.00,
         logo: 'None',
         type: 'Uploaded',

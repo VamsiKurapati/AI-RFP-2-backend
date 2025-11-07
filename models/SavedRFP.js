@@ -11,11 +11,17 @@ const SavedRFPSchema = new mongoose.Schema({
     budget: String,
     deadline: String,
     organization: String,
-    fundingType: String,
     organizationType: String,
     link: String,
     contact: String,
-    timeline: String
+    docsLink: String,
+    office: String,
+    issuingOffice: String,
+    country: String,
+    state: String,
+    baseType: String,
+    setAside: String,
+    solicitationNumber: String,
   }
 }, { timestamps: true });
 

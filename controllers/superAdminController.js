@@ -759,6 +759,35 @@ exports.sendEmail = async (req, res) => {
   }
 };
 
+//Fetch the subscriptions of all users
+exports.getSubscriptionsOfAllUsers = async (req, res) => {
+  try {
+    const subscriptions = await Subscription.find({ user_id: { $ne: null } });
+
+    //Now just verify if the users exist and have company profiles. If exists then add the respective subscription data to the subscriptions
+
+    const userSubscriptions = subscriptions.map(async (subscription) => {
+      const user = await User.findOne({ _id: subscription.user_id });
+      if (!user) {
+        return null;
+      }
+      const companyProfile = await CompanyProfile.findOne({ userId: user._id });
+      if (!companyProfile) {
+        return null;
+      }
+      return {
+        ...subscription.toObject(),
+        userName: user.fullName,
+        userEmail: user.email,
+        companyName: companyProfile.companyName
+      };
+    });
+    res.status(200).json(await Promise.all(userSubscriptions));
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching subscriptions of all users", error: err.message });
+  }
+};
+
 const handleEnterpriseCheckoutSessionCompleted = async (session) => {
   try {
     const customPlanId = new URL(session.success_url).searchParams.get('customPlanId');
@@ -874,8 +903,76 @@ const handleEnterpriseCheckoutSessionCompleted = async (session) => {
 
       await dbSession.commitTransaction();
     } catch (error) {
+      // Abort database transaction
       await dbSession.abortTransaction();
-      throw error;
+
+      // Initiate automatic refund if payment was made
+      if (session.payment_status === 'paid' && (session.payment_intent || session.id)) {
+        try {
+          const paymentIntentId = session.payment_intent || session.id;
+
+          const refund = await stripe.refunds.create({
+            payment_intent: paymentIntentId,
+            reason: 'requested_by_customer',
+            metadata: {
+              reason: 'database_transaction_failed',
+              userId: user._id.toString(),
+              customPlanId: customPlanId.toString(),
+              checkoutSessionId: session.id,
+              error: error.message
+            }
+          });
+
+          // Create failed payment record with refund info (outside transaction)
+          await Payment.create({
+            user_id: user._id,
+            subscription_id: null,
+            price: session.amount_total / 100,
+            status: 'Pending Refund',
+            paid_at: new Date(),
+            transaction_id: paymentIntentId,
+            refund_id: refund.id,
+            companyName: user.fullName,
+            payment_method: 'stripe',
+            failure_reason: `Database transaction failed: ${error.message}`
+          });
+
+          console.log(`Refund initiated for enterprise checkout failure: ${refund.id}`);
+
+          // Send refund notification email
+          try {
+            const { sendEmail } = require('../utils/mailSender');
+            const { subject, body } = await emailTemplates.getRefundNotificationEmail(
+              user.fullName || user.email,
+              'Custom Enterprise Plan',
+              refund.id,
+              `Database transaction failed during subscription activation: ${error.message}`
+            );
+            await sendEmail(user.email, subject, body);
+          } catch (emailError) {
+            console.error('Failed to send refund notification email:', emailError);
+          }
+        } catch (refundError) {
+          console.error('Failed to process refund after transaction failure:', refundError);
+
+          // Create payment record indicating refund failure (outside transaction)
+          try {
+            await Payment.create({
+              user_id: user._id,
+              subscription_id: null,
+              price: session.amount_total / 100,
+              status: 'Failed - Refund Required',
+              paid_at: new Date(),
+              transaction_id: session.payment_intent || session.id,
+              companyName: user.fullName,
+              payment_method: 'stripe',
+              failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
+            });
+          } catch (paymentRecordError) {
+            console.error('Failed to create payment record:', paymentRecordError);
+          }
+        }
+      }
     } finally {
       dbSession.endSession();
     }

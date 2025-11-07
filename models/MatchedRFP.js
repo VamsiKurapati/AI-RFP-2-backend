@@ -8,12 +8,15 @@ const matchedRFPSchema = new mongoose.Schema({
   budget: String,
   deadline: String,
   organization: String,
-  fundingType: String,
+  office: String,
+  issuingOffice: String,
+  country: String,
+  state: String,
   organizationType: String,
   link: String,
   type: String,
   contact: String,
-  timeline: String,
+  docsLink: String,
   baseType: {
     type: String,
     default: "Not specified"
@@ -35,11 +38,12 @@ const matchedRFPSchema = new mongoose.Schema({
 matchedRFPSchema.index({ email: 1 });
 matchedRFPSchema.index({ match: -1 });
 matchedRFPSchema.index({ organizationType: 1 });
-matchedRFPSchema.index({ fundingType: 1 });
+matchedRFPSchema.index({ solicitationNumber: 1 });
 matchedRFPSchema.index({ createdAt: -1 });
 // Compound indexes for common query patterns
 matchedRFPSchema.index({ email: 1, match: -1 });
 matchedRFPSchema.index({ email: 1, createdAt: -1 });
 matchedRFPSchema.index({ organizationType: 1, match: -1 });
+matchedRFPSchema.index({ solicitationNumber: 1, match: -1 });
 
 module.exports = mongoose.model('MatchedRFP', matchedRFPSchema);

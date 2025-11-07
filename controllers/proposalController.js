@@ -279,7 +279,11 @@ exports.advancedComplianceCheck = async (req, res) => {
         "Industry": rfp.organizationType || "Not found",
         "URL": rfp.link || "Not found",
         "Contact Information": rfp.contact || "Not found",
-        "Timeline": rfp.timeline || "Not found",
+        "Document Link": rfp.docsLink || "Not found",
+        "Office": rfp.office || "Not found",
+        "Issuing Office": rfp.issuingOffice || "Not found",
+        "Country": rfp.country || "Not found",
+        "State": rfp.state || "Not found",
       },
       "proposal": {
         ...structuredJson
@@ -498,7 +502,14 @@ exports.advancedComplianceCheckPdf = [
         "Industry": rfp.organizationType || "Not found",
         "URL": rfp.link || "Not found",
         "Contact Information": rfp.contact || "Not found",
-        "Timeline": rfp.timeline || "Not found",
+        "Document Link": rfp.docsLink || "Not found",
+        "Office": rfp.office || "Not found",
+        "Issuing Office": rfp.issuingOffice || "Not found",
+        "Country": rfp.country || "Not found",
+        "State": rfp.state || "Not found",
+        "Base Type": rfp.baseType || "Not found",
+        "Set Aside": rfp.setAside || "Not found",
+        "Solicitation Number": rfp.solicitationNumber || "Not found",
       };
 
       const resProposal = await Promise.race([
