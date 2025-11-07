@@ -24,7 +24,8 @@ const { getCompanyStatsAndData,
      updateContactData,
      handleWebhook,
      updateEmailContentinDB,
-     getEmailContentFromDB
+     getEmailContentFromDB,
+     getSubscriptionsOfAllUsers
 } = require('../controllers/superAdminController');
 
 const { syncPricesFromStripe } = require('../controllers/stripeController');
@@ -75,6 +76,9 @@ router.post('/sync-prices', verifyUser(["SuperAdmin"]), syncPricesFromStripe);
 //email content
 router.put('/updateEmailContentinDB/:id', verifyUser(["SuperAdmin"]), updateEmailContentinDB);
 router.get('/getEmailContentFromDB', verifyUser(["SuperAdmin"]), getEmailContentFromDB);
+
+//subscriptions
+router.get('/getSubscriptionsOfAllUsers', verifyUser(["SuperAdmin"]), getSubscriptionsOfAllUsers);
 
 
 module.exports = router;
