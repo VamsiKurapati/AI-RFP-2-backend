@@ -71,9 +71,6 @@ router.get('/getContactData', verifyUser(["SuperAdmin"]), getContactData);
 router.delete('/deleteContactData/:id', verifyUser(["SuperAdmin"]), deleteContactData);
 router.put('/updateContactData/:id', verifyUser(["SuperAdmin"]), updateContactData);
 
-//Webhook
-router.post('/webhook', handleWebhook);
-
 //Price Sync Route (for Super Admin use - can add admin verification if needed)
 router.post('/sync-prices', verifyUser(["SuperAdmin"]), syncPricesFromStripe);
 

@@ -17,7 +17,7 @@ const SubscriptionPlan = require('./models/SubscriptionPlan.js');
 const Subscription = require('./models/Subscription.js');
 const nodemailer = require('nodemailer');
 const Contact = require('./models/Contact.js');
-const superAdminController = require('./controllers/superAdminController');
+const { handleWebhook } = require('./controllers/stripeController');
 const { validateEmail } = require('./utils/validation');
 const { getContactFormEmail } = require('./utils/emailTemplates');
 
@@ -130,8 +130,7 @@ const sendEmail = async (req, res) => {
   }
 };
 
-app.post('/admin/webhook', express.raw({ type: 'application/json' }), superAdminController.handleWebhook);
-
+app.post('/stripe/webhook', express.raw({ type: 'application/json' }), handleWebhook);
 
 app.use(express.json());
 

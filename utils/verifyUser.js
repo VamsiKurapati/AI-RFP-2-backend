@@ -25,6 +25,12 @@ const verifyUser = (roles) => async (req, res, next) => {
                 return next(errorHandler(401, "Unauthorized: Invalid user payload"));
             }
 
+            if (roles.length === 1 && roles[0] === "company") {
+                if (user.role !== "company") {
+                    return next(errorHandler(403, "Forbidden: User is not a company"));
+                }
+            }
+
             req.user = user;
 
             // If user's role is allowed directly

@@ -8,6 +8,7 @@ const Payment = require('../models/Payments');
 const CompanyProfile = require('../models/CompanyProfile');
 const { sendEmail } = require('../utils/mailSender');
 const emailTemplates = require('../utils/emailTemplates');
+const CustomPlan = require('../models/CustomPlan');
 
 // Stripe Configuration
 const STRIPE_CONFIG = {
@@ -820,28 +821,28 @@ const activateSubscriptionFromStripe = async (stripeSubscription, invoice = null
         const planPrice = priceAmount / 100; // Convert from cents
 
         // Calculate subscription dates from Stripe subscription
-        const startDate = new Date(subscription.current_period_start * 1000);
-        const endDate = new Date(subscription.current_period_end * 1000);
-        const renewalDate = new Date(subscription.current_period_end * 1000);
+        const startDate = new Date();
+        const endDate = (billingCycle === STRIPE_CONFIG.BILLING_CYCLES.YEARLY || billingCycle === "Yearly") ? new Date(startDate.getFullYear() + 1, startDate.getMonth(), startDate.getDate()) : new Date(startDate.getMonth() + 1, startDate.getDate());
+        const renewalDate = endDate;
 
         // Check for existing subscription
         const existingSubscription = await Subscription.findOne({ user_id: userId });
 
-        let newMaxRfp = plan.maxRFPProposalGenerations;
-        let newMaxGrant = plan.maxGrantProposalGenerations;
+        // let newMaxRfp = plan.maxRFPProposalGenerations;
+        // let newMaxGrant = plan.maxGrantProposalGenerations;
 
-        // Carry over unused quotas if subscription exists
-        if (existingSubscription && existingSubscription.stripeSubscriptionId !== subscription.id) {
-            const unusedRfp =
-                (existingSubscription.max_rfp_proposal_generations -
-                    existingSubscription.current_rfp_proposal_generations) || 0;
-            const unusedGrant =
-                (existingSubscription.max_grant_proposal_generations -
-                    existingSubscription.current_grant_proposal_generations) || 0;
+        // // Carry over unused quotas if subscription exists
+        // if (existingSubscription && existingSubscription.stripeSubscriptionId !== subscription.id) {
+        //     const unusedRfp =
+        //         (existingSubscription.max_rfp_proposal_generations -
+        //             existingSubscription.current_rfp_proposal_generations) || 0;
+        //     const unusedGrant =
+        //         (existingSubscription.max_grant_proposal_generations -
+        //             existingSubscription.current_grant_proposal_generations) || 0;
 
-            newMaxRfp += unusedRfp;
-            newMaxGrant += unusedGrant;
-        }
+        //     newMaxRfp += unusedRfp;
+        //     newMaxGrant += unusedGrant;
+        // }
 
         // Use transaction for data consistency
         const session = await mongoose.startSession();
@@ -862,8 +863,10 @@ const activateSubscriptionFromStripe = async (stripeSubscription, invoice = null
                         max_viewers: plan.maxViewers,
                         current_rfp_proposal_generations: existingSubscription?.current_rfp_proposal_generations || 0,
                         current_grant_proposal_generations: existingSubscription?.current_grant_proposal_generations || 0,
-                        max_rfp_proposal_generations: newMaxRfp,
-                        max_grant_proposal_generations: newMaxGrant,
+                        // max_rfp_proposal_generations: newMaxRfp,
+                        // max_grant_proposal_generations: newMaxGrant,
+                        max_rfp_proposal_generations: plan.maxRFPProposalGenerations,
+                        max_grant_proposal_generations: plan.maxGrantProposalGenerations,
                         canceled_at: null,
                         auto_renewal: true, // Enable auto-renewal
                         stripeSubscriptionId: subscription.id,
@@ -1120,10 +1123,6 @@ const handleSubscriptionWebhook = async (event) => {
     }
 };
 
-// Handle price update/creation events from Stripe
-// Note: In Stripe, you cannot change the amount of an existing price.
-// When updating a price amount, you must create a new price and update the plan's price ID.
-// This handler will sync price changes when prices are updated or newly created.
 const handlePriceUpdate = async (price, eventType = 'updated') => {
     try {
         const priceId = price.id;
@@ -1266,6 +1265,346 @@ const handlePriceUpdate = async (price, eventType = 'updated') => {
     }
 };
 
+const handleEnterpriseCheckoutSessionCompleted = async (session) => {
+    try {
+        const customPlanId = new URL(session.success_url).searchParams.get('customPlanId');
+        if (!customPlanId) {
+            return { success: false, error: 'No customPlanId found' };
+        }
+
+        const user = await User.findOne({ email: session.customer_email });
+        if (!user || user.role !== "company") {
+            return { success: false, error: 'User not found or not a company' };
+        }
+
+        const customPlan = await CustomPlan.findById(customPlanId);
+        if (!customPlan) {
+            return { success: false, error: 'Custom plan not found' };
+        }
+
+        // Check existing subscription before deleting it to preserve unused generations
+        const existingSubscription = await Subscription.findOne({ user_id: user._id });
+
+        let newMaxRfp = customPlan.maxRFPProposalGenerations;
+        let newMaxGrant = customPlan.maxGrantProposalGenerations;
+
+        if (existingSubscription) {
+            const unusedRfp =
+                (existingSubscription.max_rfp_proposal_generations -
+                    existingSubscription.current_rfp_proposal_generations) || 0;
+            const unusedGrant =
+                (existingSubscription.max_grant_proposal_generations -
+                    existingSubscription.current_grant_proposal_generations) || 0;
+
+            newMaxRfp += unusedRfp;
+            newMaxGrant += unusedGrant;
+        }
+
+        // Use transaction for data consistency
+        const dbSession = await mongoose.startSession();
+        dbSession.startTransaction();
+
+        try {
+            await CustomPlan.findByIdAndUpdate(customPlanId, {
+                status: 'paid',
+                paymentIntentId: session.payment_intent || session.id,
+                paidAt: new Date()
+            }, { session: dbSession });
+
+            // Delete existing subscriptions after checking for unused generations
+            await Subscription.deleteMany({ user_id: user._id }, { session: dbSession });
+
+            const subscription = await Subscription.findOneAndUpdate(
+                { user_id: user._id },
+                {
+                    $set: {
+                        plan_name: "Custom Enterprise Plan",
+                        plan_price: session.amount_total / 100,
+                        start_date: new Date(),
+                        end_date: (() => {
+                            const endDate = new Date();
+                            if (session.metadata?.planType === "monthly") {
+                                endDate.setMonth(endDate.getMonth() + 1);
+                            } else {
+                                endDate.setFullYear(endDate.getFullYear() + 1);
+                            }
+                            return endDate;
+                        })(),
+                        renewal_date: (() => {
+                            const renewalDate = new Date();
+                            if (session.metadata?.planType === "monthly") {
+                                renewalDate.setMonth(renewalDate.getMonth() + 1);
+                            } else {
+                                renewalDate.setFullYear(renewalDate.getFullYear() + 1);
+                            }
+                            return renewalDate;
+                        })(),
+                        max_editors: session.metadata?.maxEditors || customPlan.maxEditors || 0,
+                        max_viewers: session.metadata?.maxViewers || customPlan.maxViewers || 0,
+                        max_rfp_proposal_generations: newMaxRfp,
+                        max_grant_proposal_generations: newMaxGrant,
+                        current_rfp_proposal_generations: 0,
+                        current_grant_proposal_generations: 0,
+                        auto_renewal: false,
+                        stripeSubscriptionId: session.subscription || null,
+                        stripePriceId: session.payment_intent || session.id || null
+                    }
+                },
+                { upsert: true, new: true, session: dbSession }
+            );
+
+            await Payment.create([{
+                user_id: user._id,
+                subscription_id: subscription._id,
+                companyName: user.fullName,
+                price: session.amount_total / 100,
+                currency: (session.currency || "usd").toUpperCase(),
+                status: 'Success',
+                paid_at: new Date(),
+                transaction_id: session.payment_intent || session.id,
+                payment_method: 'stripe',
+            }], { session: dbSession });
+
+            await Notification.create([{
+                user_id: user._id,
+                type: 'Subscription',
+                title: 'Enterprise Plan Payment Successful',
+                description: 'A payment for the custom Enterprise Plan was successful for ' + user.email + '.',
+                created_at: new Date()
+            }], { session: dbSession });
+
+            await User.findOneAndUpdate({ email: user.email }, {
+                subscription_status: 'active',
+                subscription_id: subscription._id
+            }, { session: dbSession });
+
+            await dbSession.commitTransaction();
+        } catch (error) {
+            // Abort database transaction
+            await dbSession.abortTransaction();
+
+            // Initiate automatic refund if payment was made
+            if (session.payment_status === 'paid' && (session.payment_intent || session.id)) {
+                try {
+                    const paymentIntentId = session.payment_intent || session.id;
+
+                    const refund = await stripe.refunds.create({
+                        payment_intent: paymentIntentId,
+                        reason: 'requested_by_customer',
+                        metadata: {
+                            reason: 'database_transaction_failed',
+                            userId: user._id.toString(),
+                            customPlanId: customPlanId.toString(),
+                            checkoutSessionId: session.id,
+                            error: error.message
+                        }
+                    });
+
+                    // Create failed payment record with refund info (outside transaction)
+                    await Payment.create({
+                        user_id: user._id,
+                        subscription_id: null,
+                        price: session.amount_total / 100,
+                        status: 'Pending Refund',
+                        paid_at: new Date(),
+                        transaction_id: paymentIntentId,
+                        refund_id: refund.id,
+                        companyName: user.fullName,
+                        payment_method: 'stripe',
+                        failure_reason: `Database transaction failed: ${error.message}`
+                    });
+
+                    console.log(`Refund initiated for enterprise checkout failure: ${refund.id}`);
+
+                    // Send refund notification email
+                    try {
+                        const { subject, body } = await emailTemplates.getRefundNotificationEmail(
+                            user.fullName || user.email,
+                            'Custom Enterprise Plan',
+                            refund.id,
+                            `Database transaction failed during subscription activation: ${error.message}`
+                        );
+                        await sendEmail(user.email, subject, body);
+                    } catch (emailError) {
+                        console.error('Failed to send refund notification email:', emailError);
+                    }
+                } catch (refundError) {
+                    console.error('Failed to process refund after transaction failure:', refundError);
+
+                    // Create payment record indicating refund failure (outside transaction)
+                    try {
+                        await Payment.create({
+                            user_id: user._id,
+                            subscription_id: null,
+                            price: session.amount_total / 100,
+                            status: 'Failed - Refund Required',
+                            paid_at: new Date(),
+                            transaction_id: session.payment_intent || session.id,
+                            companyName: user.fullName,
+                            payment_method: 'stripe',
+                            failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
+                        });
+                    } catch (paymentRecordError) {
+                        console.error('Failed to create payment record:', paymentRecordError);
+                    }
+                }
+            }
+        } finally {
+            dbSession.endSession();
+        }
+
+        const transporter = nodemailer.createTransport({
+            host: "smtp.gmail.com",
+            port: 465,
+            secure: true,
+            auth: {
+                user: process.env.MAIL_USER,
+                pass: process.env.MAIL_PASS
+            }
+        });
+
+        const { subject, body } = await emailTemplates.getEnterprisePaymentSuccessEmail(
+            user.fullName || '',
+            customPlan.planType,
+            customPlan.price,
+            customPlan.maxEditors,
+            customPlan.maxViewers,
+            customPlan.maxRFPProposalGenerations,
+            customPlan.maxGrantProposalGenerations
+        );
+
+        const mailOptions = {
+            from: process.env.MAIL_USER,
+            to: user.email,
+            subject: subject,
+            html: body
+        };
+
+        await transporter.sendMail(mailOptions);
+
+        return { success: true, message: 'Enterprise subscription activated successfully' };
+
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+};
+
+const handleEnterpriseCheckoutSessionFailed = async (session) => {
+    try {
+        const customPlanId = new URL(session.cancel_url).searchParams.get('customPlanId');
+        if (!customPlanId) return;
+
+        await CustomPlan.findByIdAndUpdate(customPlanId, {
+            status: 'failed',
+            paymentIntentId: session.payment_intent || session.id,
+            paidAt: new Date()
+        });
+
+        const user = await User.findOne({ email: session.customer_email });
+        if (!user || user.role !== "company") return;
+
+        await Notification.create({
+            user_id: user._id,
+            type: 'Subscription',
+            title: 'Enterprise Plan Payment Failed',
+            description: 'A payment for the custom Enterprise Plan failed for ' + user.email + '.',
+            created_at: new Date()
+        });
+
+        const transporter = nodemailer.createTransport({
+            host: "smtp.gmail.com",
+            port: 465,
+            secure: true,
+            auth: {
+                user: process.env.MAIL_USER,
+                pass: process.env.MAIL_PASS
+            }
+        });
+
+        const { subject, body } = await emailTemplates.getEnterprisePaymentFailedEmail(user.fullName || '');
+
+        const mailOptions = {
+            from: process.env.MAIL_USER,
+            to: user.email,
+            subject: subject,
+            html: body
+        };
+
+        await transporter.sendMail(mailOptions);
+
+    } catch (err) {
+        console.error('Error in handleWebhook:', err);
+    }
+};
+
+const handleWebhook = async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err) {
+        console.error('Error in handleWebhook:', err);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    const session = event.data.object;
+
+    try {
+        switch (event.type) {
+            case 'checkout.session.completed':
+                // Check if it's a subscription checkout or enterprise checkout
+                if (session.mode === 'subscription') {
+                    await handleSubscriptionWebhook(event);
+                } else {
+                    await handleEnterpriseCheckoutSessionCompleted(session);
+                }
+                break;
+
+            case 'checkout.session.expired':
+                await handleEnterpriseCheckoutSessionFailed(session);
+                break;
+
+            case 'checkout.session.async_payment_failed':
+                await handleEnterpriseCheckoutSessionFailed(session);
+                break;
+
+            case 'checkout.session.async_payment_succeeded':
+                if (session.mode === 'subscription') {
+                    await handleSubscriptionWebhook(event);
+                } else {
+                    await handleEnterpriseCheckoutSessionCompleted(session);
+                }
+                break;
+
+            // Subscription events
+            case 'invoice.paid':
+            case 'invoice.payment_failed':
+            case 'customer.subscription.updated':
+            case 'customer.subscription.deleted':
+                await handleSubscriptionWebhook(event);
+                break;
+
+            // Price update events
+            case 'price.updated':
+            case 'price.created': {
+                await handlePriceUpdate(event.data.object, event.type === 'price.created' ? 'created' : 'updated');
+                break;
+            }
+
+            default:
+                console.log(`Unhandled webhook event type: ${event.type}`);
+        }
+
+        res.status(200).json({ received: true });
+
+    } catch (error) {
+        console.error('Error in handleWebhook:', error);
+        res.status(500).json({ error: 'Webhook processing failed' });
+    }
+};
+
 module.exports = {
     createPaymentIntent,
     activateSubscription,
@@ -1273,6 +1612,7 @@ module.exports = {
     getRefundStatus,
     syncPricesFromStripe,
     handleSubscriptionWebhook,
+    handleWebhook,
     activateSubscriptionFromStripe,
     handlePriceUpdate
 };
