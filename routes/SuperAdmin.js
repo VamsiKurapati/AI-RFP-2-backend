@@ -25,7 +25,11 @@ const { getCompanyStatsAndData,
      handleWebhook,
      updateEmailContentinDB,
      getEmailContentFromDB,
-     getSubscriptionsOfAllUsers
+     getSubscriptionsOfAllUsers,
+     deactivateSubscription,
+     assignNewSubscriptionToUser,
+     bulkDeactivateSubscriptions,
+     updateUserSubscription
 } = require('../controllers/superAdminController');
 
 const { syncPricesFromStripe } = require('../controllers/stripeController');
@@ -79,6 +83,10 @@ router.get('/getEmailContentFromDB', verifyUser(["SuperAdmin"]), getEmailContent
 
 //subscriptions
 router.get('/getSubscriptionsOfAllUsers', verifyUser(["SuperAdmin"]), getSubscriptionsOfAllUsers);
+router.post('/deactivateSubscription', verifyUser(["SuperAdmin"]), deactivateSubscription);
+router.post('/assignSubscription', verifyUser(["SuperAdmin"]), assignNewSubscriptionToUser);
+router.post('/updateUserSubscription', verifyUser(["SuperAdmin"]), updateUserSubscription);
+router.post('/bulkDeactivateSubscriptions', verifyUser(["SuperAdmin"]), bulkDeactivateSubscriptions);
 
 
 module.exports = router;

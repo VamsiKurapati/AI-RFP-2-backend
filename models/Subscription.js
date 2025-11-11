@@ -14,7 +14,7 @@ const subscriptionSchema = new mongoose.Schema({
   current_rfp_proposal_generations: { type: Number, default: 0, min: 0 },
   max_grant_proposal_generations: { type: Number, required: true, min: 0 },
   current_grant_proposal_generations: { type: Number, default: 0, min: 0 },
-  auto_renewal: { type: Boolean, default: false },
+  auto_renewal: { type: Boolean, default: true },
   stripeSubscriptionId: { type: String, default: null },
   stripePriceId: { type: String, default: null }
 }, { timestamps: true });

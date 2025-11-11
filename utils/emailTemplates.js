@@ -52,7 +52,18 @@ function replacePlaceholders(template, replacements) {
         result = result.replace(regex, value !== null && value !== undefined ? String(value) : '');
     }
 
-    return result;
+    return applyConditionalBlocks(result, allReplacements);
+}
+
+function applyConditionalBlocks(template, replacements) {
+    if (!template) return template;
+    return template.replace(/<!--\s*IF\s+([a-zA-Z0-9_]+)\s*-->([\s\S]*?)<!--\s*ENDIF\s+\1\s*-->/g, (match, key, content) => {
+        const value = replacements[key];
+        if (value !== null && value !== undefined && value !== '') {
+            return content;
+        }
+        return '';
+    });
 }
 
 // Helper function to get email content from database with fallback
@@ -936,8 +947,96 @@ exports.getContactFormEmail = async (name, email, company, description) => {
     };
 };
 
+// Subscription Updated Email Template
+exports.getSubscriptionUpdatedEmail = async (fullName, subscriptionName, subscriptionType, subscriptionPrice, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, noteFromAdmin) => {
+    const emailContent = await getEmailContentFromDB('subscriptionUpdated');
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            subscriptionName: subscriptionName,
+            subscriptionType: subscriptionType,
+            subscriptionPrice: subscriptionPrice,
+            maxEditors: maxEditors,
+            maxViewers: maxViewers,
+            maxRFPProposalGenerations: maxRFPProposalGenerations,
+            maxGrantProposalGenerations: maxGrantProposalGenerations,
+            noteFromAdmin: noteFromAdmin,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const content = `
+        <div style="${styles.greeting}">Subscription Updated! 🎉</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+
+        <p style="${styles.message}">Your subscription has been updated. Please login to your account to access your subscription.</p>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 16px 0; color:#1E40AF; font-weight:600; font-size:18px;">📋 Subscription Details</p>
+        </div>
+
+        <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Plan</div>
+                <div style="${styles.infoValue}">${subscriptionName}</div>
+            </div>
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Price</div>
+                <div style="${styles.infoValue}">$${subscriptionPrice}</div>
+            </div>
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Max Editors</div>
+                <div style="${styles.infoValue}">${maxEditors}</div>
+            </div>
+        </div>
+        <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Max Viewers</div>
+                <div style="${styles.infoValue}">${maxViewers}</div>
+            </div>
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Max RFP Proposal Generations</div>
+                <div style="${styles.infoValue}">${maxRFPProposalGenerations}</div>
+            </div>
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Max Grant Proposal Generations</div>
+                <div style="${styles.infoValue}">${maxGrantProposalGenerations}</div>
+            </div>
+        </div>
+
+        ${noteFromAdmin && (
+            `
+                <div style="${styles.divider}"></div>
+                <p style="${styles.message}">Note From Admin:</p>
+                <p style="${styles.message}">${noteFromAdmin}</p>
+                <div style="${styles.divider}"></div>
+            `
+        )}
+
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">Go to Dashboard →</a>
+        </div>
+
+        <p style="${styles.message}">Start exploring all the premium features available with your new subscription!</p>
+
+        <p style="${styles.message}">Thank you for choosing RFP2GRANTS. Our team is here to support your success!</p>
+
+        <p style="${styles.message}">Best regards,</p>
+        <p style="${styles.message}">RFP2GRANTS Team</p>
+    `;
+
+    return {
+        subject: 'Subscription Updated!',
+        body: getBaseTemplate(content, 'Subscription Updated!')
+    };
+};
+
 // Subscription Assigned Email Template
-exports.getSubscriptionAssignedEmail = async (fullName, subscriptionName, subscriptionType, subscriptionPrice, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations) => {
+exports.getSubscriptionActivatedEmail = async (fullName, subscriptionName, subscriptionType, subscriptionPrice, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, noteFromAdmin) => {
     const emailContent = await getEmailContentFromDB('subscriptionAssigned');
 
     if (emailContent) {
@@ -950,6 +1049,7 @@ exports.getSubscriptionAssignedEmail = async (fullName, subscriptionName, subscr
             maxViewers: maxViewers,
             maxRFPProposalGenerations: maxRFPProposalGenerations,
             maxGrantProposalGenerations: maxGrantProposalGenerations,
+            noteFromAdmin: noteFromAdmin,
             frontendUrl: process.env.FRONTEND_URL || '#'
         };
         const body = replacePlaceholders(emailContent.body, replacements);
@@ -999,6 +1099,15 @@ exports.getSubscriptionAssignedEmail = async (fullName, subscriptionName, subscr
             </div>
         </div>
 
+        ${noteFromAdmin && (
+            `
+                <div style="${styles.divider}"></div>
+                <p style="${styles.message}">Note From Admin:</p>
+                <p style="${styles.message}">${noteFromAdmin}</p>
+                <div style="${styles.divider}"></div>
+            `
+        )}
+
         <div style="text-align:center; margin:30px 0;">
             <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">Go to Dashboard →</a>
         </div>
@@ -1011,3 +1120,45 @@ exports.getSubscriptionAssignedEmail = async (fullName, subscriptionName, subscr
         body: getBaseTemplate(content, 'Subscription Assigned to You!')
     };
 };
+
+// Subscription Deactivated Email Template
+exports.getSubscriptionDeactivatedEmail = async (fullName, email, noteFromAdmin) => {
+    const emailContent = await getEmailContentFromDB('userSubscriptionDeactivated');
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            email: email,
+            noteFromAdmin: noteFromAdmin,
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const content = `
+        <div style="${styles.greeting}">User Subscription Deactivated! ⚠️</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+
+        <p style="${styles.message}">Your subscription has been deactivated. Please purchase a new subscription from our website.</p>
+
+        ${noteFromAdmin && (
+            `
+                <div style="${styles.divider}"></div>
+                <p style="${styles.message}">Note From Admin:</p>
+                <p style="${styles.message}">${noteFromAdmin}</p>
+                <div style="${styles.divider}"></div>
+            `
+        )}
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/login" style="${styles.btnPrimary}">Go to Login →</a>
+        </div>
+    `;
+
+    return {
+        subject: 'User Subscription Deactivated!',
+        body: getBaseTemplate(content, 'User Subscription Deactivated!')
+    };
+};  

@@ -16,6 +16,8 @@ const EmployeeProfile = require("../models/EmployeeProfile");
 const emailTemplates = require("../utils/emailTemplates");
 const EmailContent = require("../models/EmailContent");
 
+const { sendEmail } = require("../utils/mailSender");
+
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // Merged Company Stats and Company Data API
@@ -1419,98 +1421,194 @@ exports.getEmailContentFromDB = async (req, res) => {
   }
 };
 
-exports.assignSubscriptionToUser = async (req, res) => {
+// Deactivate subscription to a user
+exports.deactivateSubscription = async (req, res) => {
   const user = req.user;
   if (user.role !== "SuperAdmin") {
     return res.status(403).json({ message: "Forbidden: You are not authorized to access this resource" });
   } else {
     try {
-      const { userId, subscriptionId } = req.body;
-      const userToAssignSubscriptionTo = await User.findById(userId);
+      const { userEmail, note } = req.body;
+      const userToDeactivateSubscription = await User.findOne({ email: userEmail });
 
-      if (!userToAssignSubscriptionTo) {
+      if (!userToDeactivateSubscription) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (userToAssignSubscriptionTo.role !== "company") {
+      if (userToDeactivateSubscription.email !== userEmail) {
         return res.status(403).json({ message: "Forbidden: You are not authorized to access this resource" });
       }
 
-      const subscription = await SubscriptionPlan.findById(subscriptionId);
+      //Delete the subscriptions for the user
+      await Subscription.deleteMany({ user_id: userToDeactivateSubscription._id });
 
-      if (!subscription) {
-        return res.status(404).json({ message: "Subscription not found" });
+      //Update the user's subscription status to inactive
+      await User.findByIdAndUpdate(userToDeactivateSubscription._id, { subscription_status: "inactive" });
+
+      await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
+
+      //Send email to the user
+      const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(user.fullName, userToDeactivateSubscription.email, note);
+      await sendEmail(userToDeactivateSubscription.email, subject, body);
+      res.status(200).json({ message: "User subscription deactivated successfully" });
+    }
+    catch (error) {
+      console.error('Error in deactivateSubscription:', error);
+      res.status(500).json({ message: "Error deactivating user subscription", error: error.message });
+    }
+  }
+};
+
+// Assign new subscription to a user
+exports.assignNewSubscriptionToUser = async (req, res) => {
+  const user = req.user;
+  if (user.role !== "SuperAdmin") {
+    return res.status(403).json({ message: "Forbidden: You are not authorized to access this resource" });
+  } else {
+    try {
+      const { userEmail, planName, type, note } = req.body;
+      const userToAssignNewSubscription = await User.findOne({ email: userEmail });
+
+      if (!userToAssignNewSubscription) {
+        return res.status(404).json({ message: "User not found" });
       }
 
-      const session = await mongoose.startSession();
-      session.startTransaction();
-
-      try {
-        const newSubscription = new Subscription({
-          user_id: userToAssignSubscriptionTo._id,
-          plan_name: subscription.name,
-          plan_price: subscription.monthlyPrice || subscription.yearlyPrice,
-          start_date: new Date(),
-          end_date: (() => {
-            const endDate = new Date();
-            if (subscription.planType === "monthly") {
-              endDate.setMonth(endDate.getMonth() + 1);
-            } else {
-              endDate.setFullYear(endDate.getFullYear() + 1);
-            }
-            return endDate;
-          })(),
-          renewal_date: (() => {
-            const renewalDate = new Date();
-            if (subscription.planType === "monthly") {
-              renewalDate.setMonth(renewalDate.getMonth() + 1);
-            } else {
-              renewalDate.setFullYear(renewalDate.getFullYear() + 1);
-            }
-            return renewalDate;
-          })(),
-          max_editors: subscription.maxEditors,
-          max_viewers: subscription.maxViewers,
-          max_rfp_proposal_generations: subscription.maxRFPProposalGenerations,
-          max_grant_proposal_generations: subscription.maxGrantProposalGenerations,
-          auto_renewal: false,
-          stripeSubscriptionId: null,
-          stripePriceId: null,
-        });
-        await newSubscription.save({ session });
-
-        userToAssignSubscriptionTo.subscription_id = newSubscription._id;
-        userToAssignSubscriptionTo.subscription_status = "active";
-        await userToAssignSubscriptionTo.save({ session });
-
-        const { subject, body } = await emailTemplates.getSubscriptionAssignedEmail(userToAssignSubscriptionTo.fullName, subscription.name, subscription.planType, subscription.monthlyPrice || subscription.yearlyPrice, subscription.maxEditors, subscription.maxViewers, subscription.maxRFPProposalGenerations, subscription.maxGrantProposalGenerations);
-
-        const mailOptions = {
-          from: process.env.MAIL_USER,
-          to: userToAssignSubscriptionTo.email,
-          subject: subject,
-          html: body,
-        };
-        await transporter.sendMail(mailOptions);
-        const notification = new Notification({
-          user_id: userToAssignSubscriptionTo._id,
-          type: "Subscription",
-          title: "Subscription assigned to you",
-          description: "A subscription has been assigned to you",
-          created_at: new Date(),
-        });
-        await notification.save({ session });
-        await session.commitTransaction();
-      } catch (error) {
-        await session.abortTransaction();
-        throw error;
-      } finally {
-        session.endSession();
+      if (userToAssignNewSubscription.email !== userEmail) {
+        return res.status(403).json({ message: "Forbidden: You are not authorized to access this resource" });
       }
-      res.status(200).json({ message: "Subscription assigned to user successfully" });
-    } catch (error) {
-      console.error('Error in assignSubscriptionToUser:', error);
-      res.status(500).json({ message: "Error assigning subscription to user", error: error.message });
+
+      const subscriptionPlan = await SubscriptionPlan.findOne({ name: planName });
+
+      if (!subscriptionPlan) {
+        return res.status(404).json({ message: "Subscription plan not found" });
+      }
+
+      let start_date = new Date();
+      let end_date = new Date();
+
+      if (type === "Monthly") {
+        end_date.setMonth(start_date.getMonth() + 1);
+      } else if (type === "Yearly") {
+        end_date.setFullYear(start_date.getFullYear() + 1);
+      }
+
+      //Delete the existing subscription for the user if it exists
+      await Subscription.deleteMany({ user_id: userToAssignNewSubscription._id });
+
+      //Create a new subscription
+      const newSubscription = await Subscription.create({
+        user_id: userToAssignNewSubscription._id,
+        plan_name: subscriptionPlan.name,
+        plan_price: type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice,
+        start_date: start_date,
+        end_date: end_date,
+        renewal_date: end_date,
+        max_editors: subscriptionPlan.maxEditors,
+        max_viewers: subscriptionPlan.maxViewers,
+        max_rfp_proposal_generations: subscriptionPlan.maxRFPProposalGenerations,
+        max_grant_proposal_generations: subscriptionPlan.maxGrantProposalGenerations,
+        current_rfp_proposal_generations: 0,
+        current_grant_proposal_generations: 0,
+        auto_renewal: false,
+        stripeSubscriptionId: null,
+        stripePriceId: type === "Monthly" ? subscriptionPlan.monthlyPriceId : subscriptionPlan.yearlyPriceId,
+      });
+
+      //Update the user's subscription status to active
+      await User.findByIdAndUpdate(userToAssignNewSubscription._id, { subscription_status: "active", subscription_id: newSubscription._id });
+
+      //Send email to the user
+      const { subject, body } = await emailTemplates.getSubscriptionActivatedEmail(user.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
+      await sendEmail(userToAssignNewSubscription.email, subject, body);
+      res.status(200).json({ message: "New subscription assigned to user successfully" });
+    }
+    catch (error) {
+      console.error('Error in assignNewSubscriptionToUser:', error);
+      res.status(500).json({ message: "Error assigning new subscription to user", error: error.message });
+    }
+  }
+};
+
+// Update user subscription
+exports.updateUserSubscription = async (req, res) => {
+  const user = req.user;
+  if (user.role !== "SuperAdmin") {
+    return res.status(403).json({ message: "Forbidden: You are not authorized to access this resource" });
+  } else {
+    try {
+      const { userEmail, planName, type, note } = req.body;
+      const userToUpdateSubscription = await User.findOne({ email: userEmail });
+      if (!userToUpdateSubscription) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const subscriptionPlan = await SubscriptionPlan.findOne({ name: planName });
+
+      if (!subscriptionPlan) {
+        return res.status(404).json({ message: "Subscription plan not found" });
+      }
+
+      let start_date = new Date();
+      let end_date = new Date();
+
+      if (type === "Monthly") {
+        end_date.setMonth(start_date.getMonth() + 1);
+      } else if (type === "Yearly") {
+        end_date.setFullYear(start_date.getFullYear() + 1);
+      }
+
+      //Update the existing subscription for the user if it exists
+      await Subscription.findOneAndUpdate({ user_id: userToUpdateSubscription._id }, { plan_name: subscriptionPlan.name, plan_price: type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, start_date: start_date, end_date: end_date, renewal_date: end_date, max_editors: subscriptionPlan.maxEditors, max_viewers: subscriptionPlan.maxViewers, max_rfp_proposal_generations: subscriptionPlan.maxRFPProposalGenerations, max_grant_proposal_generations: subscriptionPlan.maxGrantProposalGenerations, auto_renewal: false, stripeSubscriptionId: null, stripePriceId: type === "Monthly" ? subscriptionPlan.monthlyPriceId : subscriptionPlan.yearlyPriceId });
+
+      //Update the user's subscription status to active
+      await User.findByIdAndUpdate(userToUpdateSubscription._id, { subscription_status: "active" });
+
+      await CompanyProfile.findOneAndUpdate({ userId: userToUpdateSubscription._id }, { status: "Active" });
+
+      //Send email to the user
+      const { subject, body } = await emailTemplates.getSubscriptionUpdatedEmail(user.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
+      await sendEmail(userToUpdateSubscription.email, subject, body);
+
+      res.status(200).json({ message: "User subscription updated successfully" });
+    }
+    catch (error) {
+      console.error('Error in updateUserSubscription:', error);
+      res.status(500).json({ message: "Error updating user subscription", error: error.message });
+    }
+  }
+};
+
+
+//Bulk deactivate user subscriptions
+exports.bulkDeactivateSubscriptions = async (req, res) => {
+  const user = req.user;
+  if (user.role !== "SuperAdmin") {
+    return res.status(403).json({ message: "Forbidden: You are not authorized to access this resource" });
+  } else {
+    try {
+      const { userEmails, note } = req.body;
+
+      await Promise.all(userEmails.map(async (userEmail) => {
+        const userToDeactivateSubscription = await User.findOne({ email: userEmail });
+        if (!userToDeactivateSubscription) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        await Subscription.deleteMany({ user_id: userToDeactivateSubscription._id });
+
+        await User.findByIdAndUpdate(userToDeactivateSubscription._id, { subscription_status: "inactive" });
+
+        await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
+
+        const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(user.fullName, userToDeactivateSubscription.email, note);
+        await sendEmail(userToDeactivateSubscription.email, subject, body);
+      }));
+
+      res.status(200).json({ message: "Subscriptions deactivated successfully" });
+    }
+    catch (error) {
+      console.error('Error in bulkDeactivateUserSubscriptions:', error);
+      res.status(500).json({ message: "Error deactivating user subscriptions", error: error.message });
     }
   }
 };
