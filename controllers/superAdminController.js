@@ -1448,7 +1448,7 @@ exports.deactivateSubscription = async (req, res) => {
       await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
 
       //Send email to the user
-      const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(user.fullName, userToDeactivateSubscription.email, note);
+      const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(userToDeactivateSubscription.fullName, userToDeactivateSubscription.email, note);
       await sendEmail(userToDeactivateSubscription.email, subject, body);
       res.status(200).json({ message: "User subscription deactivated successfully" });
     }
@@ -1518,7 +1518,7 @@ exports.assignNewSubscriptionToUser = async (req, res) => {
       await User.findByIdAndUpdate(userToAssignNewSubscription._id, { subscription_status: "active", subscription_id: newSubscription._id });
 
       //Send email to the user
-      const { subject, body } = await emailTemplates.getSubscriptionActivatedEmail(user.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
+      const { subject, body } = await emailTemplates.getSubscriptionActivatedEmail(userToAssignNewSubscription.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
       await sendEmail(userToAssignNewSubscription.email, subject, body);
       res.status(200).json({ message: "New subscription assigned to user successfully" });
     }
@@ -1566,7 +1566,7 @@ exports.updateUserSubscription = async (req, res) => {
       await CompanyProfile.findOneAndUpdate({ userId: userToUpdateSubscription._id }, { status: "Active" });
 
       //Send email to the user
-      const { subject, body } = await emailTemplates.getSubscriptionUpdatedEmail(user.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
+      const { subject, body } = await emailTemplates.getSubscriptionUpdatedEmail(userToUpdateSubscription.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
       await sendEmail(userToUpdateSubscription.email, subject, body);
 
       res.status(200).json({ message: "User subscription updated successfully" });
@@ -1600,7 +1600,7 @@ exports.bulkDeactivateSubscriptions = async (req, res) => {
 
         await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
 
-        const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(user.fullName, userToDeactivateSubscription.email, note);
+        const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(userToDeactivateSubscription.fullName, userToDeactivateSubscription.email, note);
         await sendEmail(userToDeactivateSubscription.email, subject, body);
       }));
 
