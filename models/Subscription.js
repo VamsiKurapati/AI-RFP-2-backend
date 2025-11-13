@@ -16,7 +16,8 @@ const subscriptionSchema = new mongoose.Schema({
   current_grant_proposal_generations: { type: Number, default: 0, min: 0 },
   auto_renewal: { type: Boolean, default: true },
   stripeSubscriptionId: { type: String, default: null },
-  stripePriceId: { type: String, default: null }
+  stripePriceId: { type: String, default: null },
+  stripeProductId: { type: String, required: true },
 }, { timestamps: true });
 
 // Database indexes for performance optimization

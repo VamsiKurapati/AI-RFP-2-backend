@@ -18,6 +18,197 @@ const STRIPE_CONFIG = {
     }
 };
 
+// Manual refund function for admin use
+const processManualRefund = async (req, res) => {
+    try {
+        const { paymentIntentId, reason, amount } = req.body;
+        const userId = req.user._id;
+
+        // Validate required fields
+        if (!paymentIntentId || !reason) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: paymentIntentId, reason'
+            });
+        }
+
+        // Verify payment intent exists and get details
+        let paymentIntent;
+        try {
+            paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        } catch (stripeError) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to verify payment intent'
+            });
+        }
+
+        if (!paymentIntent) {
+            return res.status(404).json({
+                success: false,
+                message: 'Payment intent not found'
+            });
+        }
+
+        if (paymentIntent.status !== 'succeeded') {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment intent was not successful, cannot refund'
+            });
+        }
+
+        // Check if already refunded
+        const existingRefunds = await stripe.refunds.list({
+            payment_intent: paymentIntentId
+        });
+
+        if (existingRefunds.data.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment has already been refunded',
+                existingRefunds: existingRefunds.data
+            });
+        }
+
+        // Create refund
+        const refundData = {
+            payment_intent: paymentIntentId,
+            reason: 'requested_by_customer',
+            metadata: {
+                reason: reason,
+                refundedBy: userId.toString(),
+                refundedAt: new Date().toISOString()
+            }
+        };
+
+        // Add amount if partial refund
+        if (amount && amount > 0) {
+            refundData.amount = Math.round(amount * 100); // Convert to cents
+        }
+
+        let refund;
+        try {
+            refund = await stripe.refunds.create(refundData);
+        } catch (stripeError) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to create refund'
+            });
+        }
+
+        // Update payment record
+        await Payment.findOneAndUpdate(
+            { transaction_id: paymentIntentId },
+            {
+                $set: {
+                    status: 'Pending Refund',
+                    refund_id: refund.id,
+                    refunded_at: new Date(),
+                    refund_reason: reason
+                }
+            }
+        );
+
+        // Cancel subscription if exists
+        const subscription = await Subscription.findOne({
+            stripeSubscriptionId: paymentIntentId
+        });
+
+        if (subscription) {
+            await Subscription.findByIdAndUpdate(subscription._id, {
+                $set: {
+                    canceled_at: new Date(),
+                    auto_renewal: false
+                }
+            });
+
+            //Update user subscription status
+            await User.findByIdAndUpdate(subscription.user_id, { subscription_status: 'Inactive' }, { session });
+
+            // Update company profile subscription status
+            await CompanyProfile.findOneAndUpdate({ userId: subscription.user_id }, { status: 'Inactive' }, { session });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Refund processed successfully',
+            refund: {
+                id: refund.id,
+                amount: refund.amount,
+                status: refund.status,
+                reason: refund.reason
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to process refund',
+            error: error
+        });
+    }
+};
+
+// Get refund status
+const getRefundStatus = async (req, res) => {
+    try {
+        const { paymentIntentId } = req.params;
+
+        if (!paymentIntentId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment intent ID is required'
+            });
+        }
+
+        // Get refunds for this payment intent
+        let refunds;
+        try {
+            refunds = await stripe.refunds.list({
+                payment_intent: paymentIntentId
+            });
+        } catch (stripeError) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to retrieve refund information'
+            });
+        }
+
+        // Get payment record
+        const payment = await Payment.findOne({ transaction_id: paymentIntentId });
+
+        res.status(200).json({
+            success: true,
+            paymentIntentId: paymentIntentId,
+            refunds: refunds.data,
+            paymentRecord: payment
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to get refund status',
+            error: error
+        });
+    }
+};
+
+// Helper function to send refund notification email
+const sendRefundNotification = async (user, plan, refundId, errorMessage) => {
+    try {
+        const { subject, body } = await emailTemplates.getRefundNotificationEmail(
+            user.fullName,
+            plan.name,
+            refundId,
+            errorMessage
+        );
+
+        await sendEmail(user.email, subject, body);
+    } catch (emailError) {
+        console.error('Failed to send refund notification email:', emailError);
+    }
+};
+
 // Sync prices from Stripe products to database
 const syncPricesFromStripe = async (req, res) => {
     try {
@@ -39,7 +230,6 @@ const syncPricesFromStripe = async (req, res) => {
             try {
                 // Skip if price IDs are not set
                 if (!plan.monthlyPriceId && !plan.yearlyPriceId) {
-                    console.warn(`Plan ${plan.name} does not have Stripe price IDs configured`);
                     continue;
                 }
 
@@ -52,7 +242,6 @@ const syncPricesFromStripe = async (req, res) => {
                         const stripePrice = await stripe.prices.retrieve(plan.monthlyPriceId);
                         monthlyPrice = stripePrice.unit_amount / 100; // Convert from cents to dollars
                     } catch (error) {
-                        console.error(`Error fetching monthly price for ${plan.name}:`, error.message);
                         errors.push(`Failed to fetch monthly price for ${plan.name}: ${error.message}`);
                     }
                 }
@@ -63,7 +252,6 @@ const syncPricesFromStripe = async (req, res) => {
                         const stripePrice = await stripe.prices.retrieve(plan.yearlyPriceId);
                         yearlyPrice = stripePrice.unit_amount / 100; // Convert from cents to dollars
                     } catch (error) {
-                        console.error(`Error fetching yearly price for ${plan.name}:`, error.message);
                         errors.push(`Failed to fetch yearly price for ${plan.name}: ${error.message}`);
                     }
                 }
@@ -76,7 +264,6 @@ const syncPricesFromStripe = async (req, res) => {
 
                 updatedCount++;
             } catch (error) {
-                console.error(`Error syncing plan ${plan.name}:`, error);
                 errors.push(`Error syncing ${plan.name}: ${error.message}`);
             }
         }
@@ -89,170 +276,9 @@ const syncPricesFromStripe = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error syncing prices from Stripe:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to sync prices from Stripe',
-            error: error
-        });
-    }
-};
-
-// Create Subscription Checkout Session (for auto-renewal)
-const createPaymentIntent = async (req, res) => {
-    try {
-        const { planId, billingCycle } = req.body;
-        const userId = req.user._id;
-
-        //Enable only companies to create payment intent
-        if (req.user.role !== 'company') {
-            return res.status(403).json({
-                success: false,
-                message: 'You are not authorized to create payment intent'
-            });
-        }
-
-        // Validate required fields
-        if (!planId || !billingCycle) {
-            return res.status(400).json({
-                success: false,
-                message: 'Missing required fields: planId, billingCycle'
-            });
-        }
-
-        // Validate billing cycle
-        if (!Object.values(STRIPE_CONFIG.BILLING_CYCLES).includes(billingCycle)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid billing cycle. Must be "monthly" or "yearly"'
-            });
-        }
-
-        // Get plan details from database by _id and verify pricing
-        const plan = await SubscriptionPlan.findById(planId);
-        if (!plan) {
-            return res.status(400).json({
-                success: false,
-                message: 'Plan not found'
-            });
-        }
-
-        // Get Stripe Price ID based on billing cycle
-        const stripePriceId = billingCycle === STRIPE_CONFIG.BILLING_CYCLES.YEARLY
-            ? plan.yearlyPriceId
-            : plan.monthlyPriceId;
-
-        if (!stripePriceId) {
-            return res.status(400).json({
-                success: false,
-                message: `Stripe price ID not configured for ${billingCycle} billing cycle`
-            });
-        }
-
-        // Get or create Stripe customer
-        let user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        let stripeCustomerId = user.stripeCustomerId;
-
-        // Verify customer exists in Stripe if we have a customer ID
-        if (stripeCustomerId) {
-            try {
-                // Verify the customer exists in Stripe
-                await stripe.customers.retrieve(stripeCustomerId);
-            } catch (stripeError) {
-                // If customer doesn't exist (404) or is deleted, create a new one
-                if (stripeError.code === 'resource_missing' || stripeError.statusCode === 404) {
-                    console.log(`Customer ${stripeCustomerId} not found in Stripe, creating new customer`);
-                    stripeCustomerId = null; // Reset to create new customer
-                } else {
-                    // For other errors, log and continue to try creating a new customer
-                    console.error('Error verifying Stripe customer:', stripeError.message);
-                    stripeCustomerId = null;
-                }
-            }
-        }
-
-        // Create new customer if we don't have a valid one
-        if (!stripeCustomerId) {
-            try {
-                // Create Stripe customer
-                const customer = await stripe.customers.create({
-                    email: user.email,
-                    metadata: {
-                        userId: userId.toString()
-                    }
-                });
-
-                stripeCustomerId = customer.id;
-                user.stripeCustomerId = stripeCustomerId;
-                await user.save();
-            } catch (stripeError) {
-                console.error('Stripe customer creation failed:', stripeError);
-                return res.status(500).json({
-                    success: false,
-                    message: 'Failed to create customer account'
-                });
-            }
-        }
-
-        // Create subscription checkout session for auto-renewal
-        let checkoutSession;
-        try {
-            // Get the frontend URL from environment or use a default
-            const frontendUrl = process.env.FRONTEND_URL;
-
-            checkoutSession = await stripe.checkout.sessions.create({
-                customer: stripeCustomerId,
-                payment_method_types: ['card'],
-                line_items: [
-                    {
-                        price: stripePriceId,
-                        quantity: 1,
-                    },
-                ],
-                mode: 'subscription',
-                subscription_data: {
-                    metadata: {
-                        userId: userId.toString(),
-                        planId: planId.toString(),
-                        planName: plan.name,
-                        billingCycle: billingCycle
-                    }
-                },
-                success_url: `${frontendUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-                cancel_url: `${frontendUrl}/payment-cancel`,
-                metadata: {
-                    userId: userId.toString(),
-                    planId: planId.toString(),
-                    planName: plan.name,
-                    billingCycle: billingCycle
-                }
-            });
-        } catch (stripeError) {
-            console.error('Stripe checkout session creation failed:', stripeError);
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to create checkout session'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            sessionId: checkoutSession.id,
-            url: checkoutSession.url
-        });
-
-    } catch (error) {
-        console.error('Error creating checkout session:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to create checkout session',
             error: error
         });
     }
@@ -279,7 +305,6 @@ const activateSubscription = async (req, res) => {
                 expand: ['latest_charge']
             });
         } catch (stripeError) {
-            console.error('Stripe payment intent retrieval failed:', stripeError);
             return res.status(500).json({
                 success: false,
                 message: 'Failed to verify payment'
@@ -526,7 +551,6 @@ const activateSubscription = async (req, res) => {
                 await sendRefundNotification(req.user, plan, refundId, error.message);
 
             } catch (refundError) {
-                console.error('Failed to process refund:', refundError);
 
                 // Create payment record indicating refund failure
                 await Payment.create({
@@ -580,7 +604,6 @@ const activateSubscription = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error activating subscription:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to activate subscription',
@@ -589,1030 +612,612 @@ const activateSubscription = async (req, res) => {
     }
 };
 
-// Helper function to send refund notification email
-const sendRefundNotification = async (user, plan, refundId, errorMessage) => {
+// Create Subscription Checkout Session (for auto-renewal)
+const createPaymentIntent = async (req, res) => {
     try {
-        const { subject, body } = await emailTemplates.getRefundNotificationEmail(
-            user.fullName,
-            plan.name,
-            refundId,
-            errorMessage
-        );
-
-        await sendEmail(user.email, subject, body);
-    } catch (emailError) {
-        console.error('Failed to send refund notification email:', emailError);
-    }
-};
-
-// Manual refund function for admin use
-const processManualRefund = async (req, res) => {
-    try {
-        const { paymentIntentId, reason, amount } = req.body;
+        const { planId, billingCycle } = req.body;
         const userId = req.user._id;
 
+        //Enable only companies to create payment intent
+        if (req.user.role !== 'company') {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to create payment intent'
+            });
+        }
+
         // Validate required fields
-        if (!paymentIntentId || !reason) {
+        if (!planId || !billingCycle) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: paymentIntentId, reason'
+                message: 'Missing required fields: planId, billingCycle'
             });
         }
-
-        // Verify payment intent exists and get details
-        let paymentIntent;
-        try {
-            paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-        } catch (stripeError) {
-            console.error('Stripe payment intent retrieval failed:', stripeError);
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to verify payment intent'
-            });
-        }
-
-        if (!paymentIntent) {
-            return res.status(404).json({
-                success: false,
-                message: 'Payment intent not found'
-            });
-        }
-
-        if (paymentIntent.status !== 'succeeded') {
+        // Validate billing cycle
+        if (!Object.values(STRIPE_CONFIG.BILLING_CYCLES).includes(billingCycle)) {
             return res.status(400).json({
                 success: false,
-                message: 'Payment intent was not successful, cannot refund'
+                message: 'Invalid billing cycle. Must be "monthly" or "yearly"'
             });
         }
-
-        // Check if already refunded
-        const existingRefunds = await stripe.refunds.list({
-            payment_intent: paymentIntentId
-        });
-
-        if (existingRefunds.data.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'Payment has already been refunded',
-                existingRefunds: existingRefunds.data
-            });
-        }
-
-        // Create refund
-        const refundData = {
-            payment_intent: paymentIntentId,
-            reason: 'requested_by_customer',
-            metadata: {
-                reason: reason,
-                refundedBy: userId.toString(),
-                refundedAt: new Date().toISOString()
-            }
-        };
-
-        // Add amount if partial refund
-        if (amount && amount > 0) {
-            refundData.amount = Math.round(amount * 100); // Convert to cents
-        }
-
-        let refund;
-        try {
-            refund = await stripe.refunds.create(refundData);
-        } catch (stripeError) {
-            console.error('Stripe refund creation failed:', stripeError);
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to create refund'
-            });
-        }
-
-        // Update payment record
-        await Payment.findOneAndUpdate(
-            { transaction_id: paymentIntentId },
-            {
-                $set: {
-                    status: 'Pending Refund',
-                    refund_id: refund.id,
-                    refunded_at: new Date(),
-                    refund_reason: reason
-                }
-            }
-        );
-
-        // Cancel subscription if exists
-        const subscription = await Subscription.findOne({
-            stripeSubscriptionId: paymentIntentId
-        });
-
-        if (subscription) {
-            await Subscription.findByIdAndUpdate(subscription._id, {
-                $set: {
-                    canceled_at: new Date(),
-                    auto_renewal: false
-                }
-            });
-
-            //Update user subscription status
-            await User.findByIdAndUpdate(subscription.user_id, { subscription_status: 'Inactive' }, { session });
-
-            // Update company profile subscription status
-            await CompanyProfile.findOneAndUpdate({ userId: subscription.user_id }, { status: 'Inactive' }, { session });
-        }
-
-        res.status(200).json({
-            success: true,
-            message: 'Refund processed successfully',
-            refund: {
-                id: refund.id,
-                amount: refund.amount,
-                status: refund.status,
-                reason: refund.reason
-            }
-        });
-
-    } catch (error) {
-        console.error('Error processing manual refund:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to process refund',
-            error: error
-        });
-    }
-};
-
-// Get refund status
-const getRefundStatus = async (req, res) => {
-    try {
-        const { paymentIntentId } = req.params;
-
-        if (!paymentIntentId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Payment intent ID is required'
-            });
-        }
-
-        // Get refunds for this payment intent
-        let refunds;
-        try {
-            refunds = await stripe.refunds.list({
-                payment_intent: paymentIntentId
-            });
-        } catch (stripeError) {
-            console.error('Stripe refunds list failed:', stripeError);
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to retrieve refund information'
-            });
-        }
-
-        // Get payment record
-        const payment = await Payment.findOne({ transaction_id: paymentIntentId });
-
-        res.status(200).json({
-            success: true,
-            paymentIntentId: paymentIntentId,
-            refunds: refunds.data,
-            paymentRecord: payment
-        });
-
-    } catch (error) {
-        console.error('Error getting refund status:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to get refund status',
-            error: error
-        });
-    }
-};
-
-// Helper function to activate subscription from Stripe subscription object
-const activateSubscriptionFromStripe = async (stripeSubscription, invoice = null) => {
-    try {
-        // Get subscription details from Stripe (handle both subscription object and ID string)
-        const subscriptionId = typeof stripeSubscription === 'string' ? stripeSubscription : stripeSubscription.id;
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-            expand: ['default_payment_method', 'items.data.price.product']
-        });
-
-        // Get metadata
-        const userId = subscription.metadata.userId;
-        const planId = subscription.metadata.planId;
-        const billingCycle = subscription.metadata.billingCycle;
-
-        if (!userId || !planId || !billingCycle) {
-            throw new Error('Missing required metadata in subscription');
-        }
-
-        // Get plan from database
+        // Get plan details from database by _id and verify pricing
         const plan = await SubscriptionPlan.findById(planId);
         if (!plan) {
-            throw new Error('Plan not found in database');
-        }
-
-        // Get user
-        const user = await User.findById(userId);
-        if (!user) {
-            throw new Error('User not found');
-        }
-
-        // Determine price from subscription
-        const priceId = subscription.items.data[0]?.price?.id;
-        const priceAmount = subscription.items.data[0]?.price?.unit_amount || 0;
-        const planPrice = priceAmount / 100; // Convert from cents
-
-        // Calculate subscription dates from Stripe subscription
-        const startDate = new Date();
-        const endDate = (billingCycle === STRIPE_CONFIG.BILLING_CYCLES.YEARLY || billingCycle === "Yearly") ? new Date(startDate.getFullYear() + 1, startDate.getMonth(), startDate.getDate()) : new Date(startDate.getMonth() + 1, startDate.getDate());
-        const renewalDate = endDate;
-
-        // Check for existing subscription
-        const existingSubscription = await Subscription.findOne({ user_id: userId });
-
-        // let newMaxRfp = plan.maxRFPProposalGenerations;
-        // let newMaxGrant = plan.maxGrantProposalGenerations;
-
-        // // Carry over unused quotas if subscription exists
-        // if (existingSubscription && existingSubscription.stripeSubscriptionId !== subscription.id) {
-        //     const unusedRfp =
-        //         (existingSubscription.max_rfp_proposal_generations -
-        //             existingSubscription.current_rfp_proposal_generations) || 0;
-        //     const unusedGrant =
-        //         (existingSubscription.max_grant_proposal_generations -
-        //             existingSubscription.current_grant_proposal_generations) || 0;
-
-        //     newMaxRfp += unusedRfp;
-        //     newMaxGrant += unusedGrant;
-        // }
-
-        // Use transaction for data consistency
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
-        try {
-            // Update or create subscription
-            const dbSubscription = await Subscription.findOneAndUpdate(
-                { user_id: userId },
-                {
-                    $set: {
-                        plan_name: plan.name,
-                        plan_price: planPrice,
-                        start_date: startDate,
-                        end_date: endDate,
-                        renewal_date: renewalDate,
-                        max_editors: plan.maxEditors,
-                        max_viewers: plan.maxViewers,
-                        current_rfp_proposal_generations: existingSubscription?.current_rfp_proposal_generations || 0,
-                        current_grant_proposal_generations: existingSubscription?.current_grant_proposal_generations || 0,
-                        // max_rfp_proposal_generations: newMaxRfp,
-                        // max_grant_proposal_generations: newMaxGrant,
-                        max_rfp_proposal_generations: plan.maxRFPProposalGenerations,
-                        max_grant_proposal_generations: plan.maxGrantProposalGenerations,
-                        canceled_at: null,
-                        auto_renewal: true, // Enable auto-renewal
-                        stripeSubscriptionId: subscription.id,
-                        stripePriceId: priceId
-                    }
-                },
-                { upsert: true, new: true, session }
-            );
-
-            // Update user subscription status
-            await User.findByIdAndUpdate(userId, {
-                subscription_status: 'active',
-                subscription_id: dbSubscription._id
-            }, { session });
-
-            // Update company profile subscription status
-            await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Active' }, { session });
-
-            // Create payment record if invoice is provided
-            if (invoice) {
-                await Payment.create([{
-                    user_id: userId,
-                    subscription_id: dbSubscription._id,
-                    price: planPrice,
-                    status: 'Success',
-                    paid_at: new Date(invoice.status_transitions.paid_at * 1000),
-                    transaction_id: invoice.payment_intent || invoice.id,
-                    companyName: user.fullName,
-                    payment_method: 'stripe',
-                }], { session });
-            }
-
-            await session.commitTransaction();
-
-            // Send notification
-            const notification = new Notification({
-                type: "Subscription",
-                title: "Subscription activated",
-                description: `A subscription has been activated for ${user.email} for the plan ${plan.name}`,
-                created_at: new Date(),
-            });
-            await notification.save();
-
-            // Send email if this is a new subscription (not a renewal)
-            if (!existingSubscription || existingSubscription.stripeSubscriptionId !== subscription.id) {
-                const { subject, body } = await emailTemplates.getPaymentSuccessEmail(
-                    user.fullName,
-                    plan.name,
-                    planPrice,
-                    billingCycle,
-                    startDate,
-                    endDate
-                );
-
-                await sendEmail(user.email, subject, body);
-            }
-
-            return { success: true, subscription: dbSubscription };
-        } catch (error) {
-            // Abort database transaction
-            await session.abortTransaction();
-
-            // Initiate automatic refund if invoice/payment exists
-            if (invoice) {
-                try {
-                    const paymentIntentId = invoice.payment_intent || invoice.id;
-                    const refundAmount = invoice.amount_paid || invoice.amount_due || (planPrice * 100); // Amount in cents
-
-                    // Check if payment was actually made (not just an invoice)
-                    if (invoice.status === 'paid' && paymentIntentId) {
-                        const refund = await stripe.refunds.create({
-                            payment_intent: paymentIntentId,
-                            reason: 'requested_by_customer',
-                            metadata: {
-                                reason: 'database_transaction_failed',
-                                userId: userId.toString(),
-                                planId: planId.toString(),
-                                subscriptionId: subscription.id,
-                                error: error.message
-                            }
-                        });
-
-                        // Create failed payment record with refund info (outside transaction)
-                        await Payment.create({
-                            user_id: userId,
-                            subscription_id: null,
-                            price: planPrice,
-                            status: 'Pending Refund',
-                            paid_at: new Date(),
-                            transaction_id: paymentIntentId,
-                            refund_id: refund.id,
-                            companyName: user.fullName || user.email,
-                            payment_method: 'stripe',
-                            failure_reason: `Database transaction failed: ${error.message}`
-                        });
-
-                        console.log(`Refund initiated for subscription activation failure: ${refund.id}`);
-
-                        // Send refund notification email
-                        try {
-                            const { subject, body } = await emailTemplates.getRefundNotificationEmail(
-                                user.fullName || user.email,
-                                plan.name,
-                                refund.id,
-                                `Database transaction failed during subscription activation: ${error.message}`
-                            );
-                            await sendEmail(user.email, subject, body);
-                        } catch (emailError) {
-                            console.error('Failed to send refund notification email:', emailError);
-                        }
-                    }
-                } catch (refundError) {
-                    console.error('Failed to process refund after transaction failure:', refundError);
-
-                    // Create payment record indicating refund failure (outside transaction)
-                    try {
-                        await Payment.create({
-                            user_id: userId,
-                            subscription_id: null,
-                            price: planPrice,
-                            status: 'Failed - Refund Required',
-                            paid_at: new Date(),
-                            transaction_id: invoice.payment_intent || invoice.id,
-                            companyName: user.fullName || user.email,
-                            payment_method: 'stripe',
-                            failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
-                        });
-                    } catch (paymentRecordError) {
-                        console.error('Failed to create payment record:', paymentRecordError);
-                    }
-                }
-            }
-
-            throw error;
-        } finally {
-            session.endSession();
-        }
-    } catch (error) {
-        console.error('Error activating subscription from Stripe:', error);
-        throw error;
-    }
-};
-
-// Handle subscription webhook events
-const handleSubscriptionWebhook = async (event) => {
-    try {
-        const subscription = event.data.object;
-
-        switch (event.type) {
-            case 'checkout.session.completed':
-                // Handle checkout session completion
-                const session = subscription;
-                if (session.mode === 'subscription' && session.subscription) {
-                    // Pass subscription ID string directly
-                    await activateSubscriptionFromStripe(session.subscription);
-                }
-                break;
-
-            case 'invoice.paid':
-                // Handle successful subscription renewal payment
-                const invoice = subscription;
-                if (invoice.subscription) {
-                    // Pass subscription ID string directly
-                    await activateSubscriptionFromStripe(invoice.subscription, invoice);
-                }
-                break;
-
-            case 'invoice.payment_failed':
-                // Handle failed payment
-                const failedInvoice = subscription;
-                if (failedInvoice.subscription) {
-                    const stripeSubscription = await stripe.subscriptions.retrieve(failedInvoice.subscription, {
-                        expand: ['metadata']
-                    });
-                    const userId = stripeSubscription.metadata?.userId;
-
-                    if (userId) {
-                        // Update subscription status
-                        await Subscription.findOneAndUpdate(
-                            { stripeSubscriptionId: stripeSubscription.id },
-                            { $set: { auto_renewal: false } }
-                        );
-
-                        // Update user and company profile status
-                        await User.findByIdAndUpdate(userId, { subscription_status: 'past_due' });
-                        await CompanyProfile.findOneAndUpdate({ userId }, { status: 'Past Due' });
-
-                        // Create failed payment record
-                        await Payment.create({
-                            user_id: userId,
-                            price: failedInvoice.amount_due / 100,
-                            status: 'Failed',
-                            paid_at: new Date(),
-                            transaction_id: failedInvoice.payment_intent || failedInvoice.id,
-                            payment_method: 'stripe',
-                            failure_reason: 'Payment failed for subscription renewal'
-                        });
-                    }
-                }
-                break;
-
-            case 'customer.subscription.updated':
-                // Handle subscription updates (e.g., plan changes, cancellations)
-                const updatedSubscription = subscription;
-                const updatedUserId = updatedSubscription.metadata?.userId;
-
-                if (updatedUserId) {
-                    if (updatedSubscription.status === 'active' || updatedSubscription.status === 'trialing') {
-                        await activateSubscriptionFromStripe(updatedSubscription);
-                    } else if (updatedSubscription.status === 'canceled' || updatedSubscription.status === 'unpaid') {
-                        await Subscription.findOneAndUpdate(
-                            { stripeSubscriptionId: updatedSubscription.id },
-                            {
-                                $set: {
-                                    auto_renewal: false,
-                                    canceled_at: new Date()
-                                }
-                            }
-                        );
-
-                        await User.findByIdAndUpdate(updatedUserId, { subscription_status: 'inactive' });
-                        await CompanyProfile.findOneAndUpdate({ userId: updatedUserId }, { status: 'Inactive' });
-                    }
-                }
-                break;
-
-            case 'customer.subscription.deleted':
-                // Handle subscription cancellation
-                const deletedSubscription = subscription;
-                const deletedUserId = deletedSubscription.metadata?.userId;
-
-                if (deletedUserId) {
-                    await Subscription.findOneAndUpdate(
-                        { stripeSubscriptionId: deletedSubscription.id },
-                        {
-                            $set: {
-                                auto_renewal: false,
-                                canceled_at: new Date()
-                            }
-                        }
-                    );
-
-                    await User.findByIdAndUpdate(deletedUserId, { subscription_status: 'inactive' });
-                    await CompanyProfile.findOneAndUpdate({ userId: deletedUserId }, { status: 'Inactive' });
-                }
-                break;
-
-            default:
-                console.log(`Unhandled subscription event type: ${event.type}`);
-        }
-    } catch (error) {
-        console.error('Error handling subscription webhook:', error);
-        throw error;
-    }
-};
-
-const handlePriceUpdate = async (price, eventType = 'updated') => {
-    try {
-        const priceId = price.id;
-        const newPriceAmount = price.unit_amount ? price.unit_amount / 100 : null; // Convert from cents to dollars
-
-        if (newPriceAmount === null) {
-            console.log(`Price ${priceId} has no unit_amount, skipping sync`);
-            return { success: false, message: 'Price has no unit_amount' };
-        }
-
-        console.log(`Processing price ${eventType} for price ID: ${priceId}, amount: $${newPriceAmount}`);
-
-        // Find subscription plan that uses this price ID
-        const plan = await SubscriptionPlan.findOne({
-            $or: [
-                { monthlyPriceId: priceId },
-                { yearlyPriceId: priceId }
-            ]
-        });
-
-        if (!plan) {
-            console.log(`No subscription plan found for price ID: ${priceId}. This may be a new price that needs to be linked to a plan.`);
-            return {
+            return res.status(400).json({
                 success: false,
-                message: 'No subscription plan found for this price ID. Please link the price ID to a subscription plan in the database.'
-            };
+                message: 'Plan not found'
+            });
         }
-
-        // Determine if this is a monthly or yearly price
-        const updateData = {};
-        let priceType = '';
-        let oldPriceId = null;
-        let oldPrice = null;
-
-        if (plan.monthlyPriceId === priceId) {
-            updateData.monthlyPrice = newPriceAmount;
-            priceType = 'monthly';
-            oldPriceId = plan.monthlyPriceId;
-            oldPrice = plan.monthlyPrice;
-        } else if (plan.yearlyPriceId === priceId) {
-            updateData.yearlyPrice = newPriceAmount;
-            priceType = 'yearly';
-            oldPriceId = plan.yearlyPriceId;
-            oldPrice = plan.yearlyPrice;
+        // Get Stripe Price ID based on billing cycle
+        const stripePriceId = billingCycle === STRIPE_CONFIG.BILLING_CYCLES.YEARLY
+            ? plan.yearlyPriceId
+            : plan.monthlyPriceId;
+        if (!stripePriceId) {
+            return res.status(400).json({
+                success: false,
+                message: `Stripe price ID not configured for ${billingCycle} billing cycle`
+            });
         }
-
-        // Only update if price has changed
-        if (oldPrice === newPriceAmount) {
-            console.log(`Price for plan "${plan.name}" (${priceType}) is already $${newPriceAmount}, no update needed`);
-            return {
-                success: true,
-                message: 'Price already synchronized',
-                planName: plan.name,
-                priceType,
-                price: newPriceAmount
-            };
+        // Get or create Stripe customer
+        let user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
         }
-
-        // Update all active Stripe subscriptions to use the new price BEFORE updating the plan
-        // This ensures customers are charged the latest price on their next renewal
-        let updatedSubscriptions = 0;
-        let subscriptionErrors = [];
-
-        // Only update subscriptions if the price ID actually changed (new price created)
-        if (oldPriceId && oldPriceId !== priceId) {
+        let stripeCustomerId = user.stripeCustomerId;
+        // Verify customer exists in Stripe if we have a customer ID
+        if (stripeCustomerId) {
             try {
-                // Find all active subscriptions in our database that use this plan
-                const activeSubscriptions = await Subscription.find({
-                    plan_name: plan.name,
-                    canceled_at: null,
-                    stripeSubscriptionId: { $ne: null }
+                // Verify the customer exists in Stripe
+                const customer = await stripe.customers.retrieve(stripeCustomerId);
+                if (!customer || customer.deleted) {
+                    stripeCustomerId = null; // Reset to create new customer
+                }
+            } catch (stripeError) {
+                // If customer doesn't exist (404) or is deleted, create a new one
+                if (stripeError.code === 'resource_missing' || stripeError.statusCode === 404) {
+                    stripeCustomerId = null; // Reset to create new customer
+                } else {
+                    // For other errors, log and continue to try creating a new customer
+                    stripeCustomerId = null;
+                }
+            }
+        }
+        // Create new customer if we don't have a valid one
+        if (!stripeCustomerId) {
+            try {
+                // Create Stripe customer
+                const customer = await stripe.customers.create({
+                    email: user.email,
+                    metadata: {
+                        userId: userId.toString()
+                    }
                 });
 
-                for (const dbSubscription of activeSubscriptions) {
-                    try {
-                        // Retrieve the Stripe subscription to check its current price
-                        const stripeSubscription = await stripe.subscriptions.retrieve(dbSubscription.stripeSubscriptionId);
-
-                        // Check if this subscription uses the old price ID
-                        const currentPriceId = stripeSubscription.items.data[0]?.price?.id;
-
-                        // Update subscription if it's using the old price
-                        if (currentPriceId === oldPriceId) {
-                            // Update the subscription to use the new price
-                            await stripe.subscriptions.update(stripeSubscription.id, {
-                                items: [{
-                                    id: stripeSubscription.items.data[0].id,
-                                    price: priceId, // Use the new price ID
-                                }],
-                                proration_behavior: 'none' // Don't prorate, charge new price on next renewal
-                            });
-
-                            // Update our database with the new price ID
-                            await Subscription.findByIdAndUpdate(dbSubscription._id, {
-                                stripePriceId: priceId,
-                                plan_price: newPriceAmount
-                            });
-
-                            updatedSubscriptions++;
-                            console.log(`Updated subscription ${stripeSubscription.id} to use new price ${priceId} ($${oldPrice} -> $${newPriceAmount})`);
-                        }
-                    } catch (subError) {
-                        console.error(`Error updating subscription ${dbSubscription.stripeSubscriptionId}:`, subError.message);
-                        subscriptionErrors.push(`Failed to update subscription ${dbSubscription.stripeSubscriptionId}: ${subError.message}`);
-                    }
-                }
-            } catch (error) {
-                console.error('Error updating subscriptions:', error);
-                subscriptionErrors.push(`Error updating subscriptions: ${error.message}`);
+                stripeCustomerId = customer.id;
+                user.stripeCustomerId = stripeCustomerId;
+                await user.save();
+            } catch (stripeError) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to create customer account'
+                });
             }
         }
+        const stripeProductId = billingCycle === STRIPE_CONFIG.BILLING_CYCLES.YEARLY
+            ? plan.stripeProductYearlyId
+            : plan.stripeProductMonthlyId;
+        if (!stripeProductId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Stripe product ID not configured for this plan'
+            });
+        }
+        //Retrieve the product details from the plan
+        const product = await stripe.products.retrieve(stripeProductId);
+        if (!product) {
+            return res.status(400).json({
+                success: false,
+                message: 'Product not found'
+            });
+        }
+        // Create subscription checkout session for auto-renewal
+        let checkoutSession;
+        try {
+            // Get the frontend URL from environment or use a default
+            const frontendUrl = process.env.FRONTEND_URL;
 
-        // Update the plan in database AFTER updating subscriptions
-        await SubscriptionPlan.findByIdAndUpdate(plan._id, updateData);
+            checkoutSession = await stripe.checkout.sessions.create({
+                customer: stripeCustomerId,
+                payment_method_types: ['card'],
+                line_items: [
+                    {
+                        price: stripePriceId,
+                        quantity: 1,
+                    },
+                ],
+                mode: 'subscription',
+                subscription_data: {
+                    metadata: {
+                        userId: userId.toString(),
+                        planId: planId.toString(),
+                        planName: plan.name,
+                        billingCycle: billingCycle,
+                        productId: stripeProductId
+                    }
+                },
+                success_url: `${frontendUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                cancel_url: `${frontendUrl}/payment-cancel`,
+                metadata: {
+                    userId: userId.toString(),
+                    planId: planId.toString(),
+                    planName: plan.name,
+                    billingCycle: billingCycle,
+                    productId: stripeProductId
+                }
+            });
+        } catch (stripeError) {
+            console.error('Failed to create checkout session:', stripeError);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to create checkout session'
+            });
+        }
 
-        console.log(`Successfully ${eventType === 'created' ? 'synced' : 'updated'} ${priceType} price for plan "${plan.name}" from $${oldPrice} to $${newPriceAmount}. Updated ${updatedSubscriptions} active subscription(s).`);
-
-        // Create notification
-        const notification = new Notification({
-            type: "Price Update",
-            title: `Price ${eventType === 'created' ? 'synced' : 'updated'}`,
-            description: `Price for plan "${plan.name}" (${priceType}) has been ${eventType === 'created' ? 'synced' : 'updated'} to $${newPriceAmount} in Stripe. ${updatedSubscriptions} active subscription(s) updated to use new price on next renewal.`,
-            created_at: new Date(),
-        });
-        await notification.save();
-
-        return {
+        res.status(200).json({
             success: true,
-            message: `Price ${eventType === 'created' ? 'synced' : 'updated'} for plan "${plan.name}"`,
-            planName: plan.name,
-            priceType,
-            oldPrice,
-            newPrice: newPriceAmount,
-            updatedSubscriptions,
-            subscriptionErrors: subscriptionErrors.length > 0 ? subscriptionErrors : undefined
-        };
+            sessionId: checkoutSession.id,
+            url: checkoutSession.url
+        });
+
     } catch (error) {
-        console.error('Error handling price update:', error);
-        throw error;
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to create checkout session',
+            error: error
+        });
     }
 };
 
-const handleEnterpriseCheckoutSessionCompleted = async (session) => {
+const handleSubscriptionWebhook = async (event) => {
+    const { type, data } = event;
+    const stripeObject = data.object;
+
     try {
-        const customPlanId = new URL(session.success_url).searchParams.get('customPlanId');
-        if (!customPlanId) {
-            return { success: false, error: 'No customPlanId found' };
-        }
-
-        const user = await User.findOne({ email: session.customer_email });
-        if (!user || user.role !== "company") {
-            return { success: false, error: 'User not found or not a company' };
-        }
-
-        const customPlan = await CustomPlan.findById(customPlanId);
-        if (!customPlan) {
-            return { success: false, error: 'Custom plan not found' };
-        }
-
-        // Check existing subscription before deleting it to preserve unused generations
-        const existingSubscription = await Subscription.findOne({ user_id: user._id });
-
-        let newMaxRfp = customPlan.maxRFPProposalGenerations;
-        let newMaxGrant = customPlan.maxGrantProposalGenerations;
-
-        if (existingSubscription) {
-            const unusedRfp =
-                (existingSubscription.max_rfp_proposal_generations -
-                    existingSubscription.current_rfp_proposal_generations) || 0;
-            const unusedGrant =
-                (existingSubscription.max_grant_proposal_generations -
-                    existingSubscription.current_grant_proposal_generations) || 0;
-
-            newMaxRfp += unusedRfp;
-            newMaxGrant += unusedGrant;
-        }
-
-        // Use transaction for data consistency
-        const dbSession = await mongoose.startSession();
-        dbSession.startTransaction();
-
-        try {
-            await CustomPlan.findByIdAndUpdate(customPlanId, {
-                status: 'paid',
-                paymentIntentId: session.payment_intent || session.id,
-                paidAt: new Date()
-            }, { session: dbSession });
-
-            // Delete existing subscriptions after checking for unused generations
-            await Subscription.deleteMany({ user_id: user._id }, { session: dbSession });
-
-            const subscription = await Subscription.findOneAndUpdate(
-                { user_id: user._id },
-                {
-                    $set: {
-                        plan_name: "Custom Enterprise Plan",
-                        plan_price: session.amount_total / 100,
-                        start_date: new Date(),
-                        end_date: (() => {
-                            const endDate = new Date();
-                            if (session.metadata?.planType === "monthly") {
-                                endDate.setMonth(endDate.getMonth() + 1);
-                            } else {
-                                endDate.setFullYear(endDate.getFullYear() + 1);
-                            }
-                            return endDate;
-                        })(),
-                        renewal_date: (() => {
-                            const renewalDate = new Date();
-                            if (session.metadata?.planType === "monthly") {
-                                renewalDate.setMonth(renewalDate.getMonth() + 1);
-                            } else {
-                                renewalDate.setFullYear(renewalDate.getFullYear() + 1);
-                            }
-                            return renewalDate;
-                        })(),
-                        max_editors: session.metadata?.maxEditors || customPlan.maxEditors || 0,
-                        max_viewers: session.metadata?.maxViewers || customPlan.maxViewers || 0,
-                        max_rfp_proposal_generations: newMaxRfp,
-                        max_grant_proposal_generations: newMaxGrant,
-                        current_rfp_proposal_generations: 0,
-                        current_grant_proposal_generations: 0,
-                        auto_renewal: false,
-                        stripeSubscriptionId: session.subscription || null,
-                        stripePriceId: session.payment_intent || session.id || null
-                    }
-                },
-                { upsert: true, new: true, session: dbSession }
-            );
-
-            await Payment.create([{
-                user_id: user._id,
-                subscription_id: subscription._id,
-                companyName: user.fullName,
-                price: session.amount_total / 100,
-                currency: (session.currency || "usd").toUpperCase(),
-                status: 'Success',
-                paid_at: new Date(),
-                transaction_id: session.payment_intent || session.id,
-                payment_method: 'stripe',
-            }], { session: dbSession });
-
-            await Notification.create([{
-                user_id: user._id,
-                type: 'Subscription',
-                title: 'Enterprise Plan Payment Successful',
-                description: 'A payment for the custom Enterprise Plan was successful for ' + user.email + '.',
-                created_at: new Date()
-            }], { session: dbSession });
-
-            await User.findOneAndUpdate({ email: user.email }, {
-                subscription_status: 'active',
-                subscription_id: subscription._id
-            }, { session: dbSession });
-
-            await dbSession.commitTransaction();
-        } catch (error) {
-            // Abort database transaction
-            await dbSession.abortTransaction();
-
-            // Initiate automatic refund if payment was made
-            if (session.payment_status === 'paid' && (session.payment_intent || session.id)) {
-                try {
-                    const paymentIntentId = session.payment_intent || session.id;
-
-                    const refund = await stripe.refunds.create({
-                        payment_intent: paymentIntentId,
-                        reason: 'requested_by_customer',
-                        metadata: {
-                            reason: 'database_transaction_failed',
-                            userId: user._id.toString(),
-                            customPlanId: customPlanId.toString(),
-                            checkoutSessionId: session.id,
-                            error: error.message
-                        }
-                    });
-
-                    // Create failed payment record with refund info (outside transaction)
-                    await Payment.create({
-                        user_id: user._id,
-                        subscription_id: null,
-                        price: session.amount_total / 100,
-                        status: 'Pending Refund',
-                        paid_at: new Date(),
-                        transaction_id: paymentIntentId,
-                        refund_id: refund.id,
-                        companyName: user.fullName,
-                        payment_method: 'stripe',
-                        failure_reason: `Database transaction failed: ${error.message}`
-                    });
-
-                    console.log(`Refund initiated for enterprise checkout failure: ${refund.id}`);
-
-                    // Send refund notification email
-                    try {
-                        const { subject, body } = await emailTemplates.getRefundNotificationEmail(
-                            user.fullName || user.email,
-                            'Custom Enterprise Plan',
-                            refund.id,
-                            `Database transaction failed during subscription activation: ${error.message}`
-                        );
-                        await sendEmail(user.email, subject, body);
-                    } catch (emailError) {
-                        console.error('Failed to send refund notification email:', emailError);
-                    }
-                } catch (refundError) {
-                    console.error('Failed to process refund after transaction failure:', refundError);
-
-                    // Create payment record indicating refund failure (outside transaction)
-                    try {
-                        await Payment.create({
-                            user_id: user._id,
-                            subscription_id: null,
-                            price: session.amount_total / 100,
-                            status: 'Failed - Refund Required',
-                            paid_at: new Date(),
-                            transaction_id: session.payment_intent || session.id,
-                            companyName: user.fullName,
-                            payment_method: 'stripe',
-                            failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
-                        });
-                    } catch (paymentRecordError) {
-                        console.error('Failed to create payment record:', paymentRecordError);
-                    }
+        switch (type) {
+            case "invoice.paid": {
+                const invoice = stripeObject;
+                // Avoid duplicates
+                const exists = await Payment.findOne({
+                    transaction_id: invoice.payment_intent || invoice.id,
+                    status: "Success",
+                });
+                if (exists) {
+                    return;
                 }
+
+                const subscriptionId =
+                    invoice.subscription ||
+                    invoice.lines?.data?.[0]?.subscription ||
+                    invoice.lines?.data?.[0]?.parent?.subscription_item_details?.subscription ||
+                    invoice.parent?.subscription_details?.subscription ||
+                    invoice.metadata?.subscriptionId;
+                if (!subscriptionId) {
+                    return;
+                }
+
+                const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId, {
+                    expand: ["items.data.price.product"],
+                });
+                await activateSubscriptionFromStripe(stripeSubscription, invoice);
+                break;
             }
-        } finally {
-            dbSession.endSession();
+
+            case "invoice.payment_failed": {
+                const invoice = stripeObject;
+                const stripeSub = await stripe.subscriptions.retrieve(invoice.subscription);
+                const userId = stripeSub.metadata?.userId;
+                if (!userId) {
+                    return;
+                }
+
+                const session = await mongoose.startSession();
+                session.startTransaction();
+
+                try {
+                    await Subscription.findOneAndUpdate(
+                        { stripeSubscriptionId: stripeSub.id },
+                        { auto_renewal: false },
+                        { session }
+                    );
+                    await User.findByIdAndUpdate(userId, { subscription_status: "inactive" }, { session });
+                    await CompanyProfile.findOneAndUpdate({ userId }, { status: "Past Due" }, { session });
+
+                    await Payment.create(
+                        [
+                            {
+                                user_id: userId,
+                                subscription_id: null,
+                                price: invoice.amount_due / 100,
+                                status: "Failed",
+                                paid_at: new Date(),
+                                transaction_id: invoice.payment_intent || invoice.id,
+                                payment_method: "stripe",
+                                failure_reason: "Payment failed for subscription renewal",
+                            },
+                        ],
+                        { session }
+                    );
+
+                    await session.commitTransaction();
+                } catch (err) {
+                    await session.abortTransaction();
+                } finally {
+                    session.endSession();
+                }
+                break;
+            }
+
+            case "customer.subscription.created":
+            case "customer.subscription.updated": {
+                break;
+            }
+
+            case "customer.subscription.deleted": {
+                const sub = stripeObject;
+                const userId = sub.metadata?.userId;
+                if (!userId) {
+                    return;
+                }
+
+                const session = await mongoose.startSession();
+                session.startTransaction();
+
+                try {
+                    await Subscription.findOneAndUpdate(
+                        { stripeSubscriptionId: sub.id },
+                        { canceled_at: new Date(), auto_renewal: false },
+                        { session }
+                    );
+                    await User.findByIdAndUpdate(userId, { subscription_status: "inactive" }, { session });
+                    await CompanyProfile.findOneAndUpdate({ userId }, { status: "Inactive" }, { session });
+
+                    await session.commitTransaction();
+                } catch (err) {
+                    await session.abortTransaction();
+                } finally {
+                    session.endSession();
+                }
+                break;
+            }
+
+            default:
         }
+    } catch (err) {
+        throw err;
+    }
+};
 
-        const transporter = nodemailer.createTransport({
-            host: "smtp.gmail.com",
-            port: 465,
-            secure: true,
-            auth: {
-                user: process.env.MAIL_USER,
-                pass: process.env.MAIL_PASS
-            }
-        });
+const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-        const { subject, body } = await emailTemplates.getEnterprisePaymentSuccessEmail(
-            user.fullName || '',
-            customPlan.planType,
-            customPlan.price,
-            customPlan.maxEditors,
-            customPlan.maxViewers,
-            customPlan.maxRFPProposalGenerations,
-            customPlan.maxGrantProposalGenerations
+    try {
+        const userId = stripeSub.metadata?.userId;
+        const planId = stripeSub.metadata?.planId;
+        const billingCycle = stripeSub.metadata?.billingCycle;
+        const productId = stripeSub.metadata?.productId;
+        const planName = stripeSub.metadata?.planName;
+
+        if (!userId || !planId || !productId || !planName || !billingCycle) {
+            throw new Error("Missing metadata for subscription activation");
+        }
+        const [plan, user] = await Promise.all([
+            SubscriptionPlan.findById(planId),
+            User.findById(userId),
+        ]);
+        if (!plan || !user) throw new Error("User or plan not found");
+        const priceAmount = stripeSub.items.data[0]?.price?.unit_amount / 100 || 0;
+        const priceId = stripeSub.items.data[0]?.price?.id;
+        const startUnix = stripeSub.items.data[0].current_period_start;
+        const endUnix = stripeSub.items.data[0].current_period_end;
+        const start = startUnix ? new Date(startUnix * 1000) : new Date();
+        const intervalCount = stripeSub.items.data[0].price.recurring.interval_count;
+        const interval = stripeSub.items.data[0].price.recurring.interval;
+        const new_end = interval === 'month' ? new Date(start.getTime() + intervalCount * 30 * 24 * 60 * 60 * 1000) : new Date(start.getTime() + intervalCount * 365 * 24 * 60 * 60 * 1000);
+        const end = endUnix ? new Date(endUnix * 1000) : new_end;
+
+        const dbSub = await Subscription.findOneAndUpdate(
+            { user_id: userId },
+            {
+                plan_name: planName,
+                plan_price: priceAmount,
+                start_date: start,
+                end_date: end,
+                renewal_date: end,
+                max_editors: plan.maxEditors,
+                max_viewers: plan.maxViewers,
+                max_rfp_proposal_generations: plan.maxRFPProposalGenerations,
+                max_grant_proposal_generations: plan.maxGrantProposalGenerations,
+                current_rfp_proposal_generations: 0,
+                current_grant_proposal_generations: 0,
+                auto_renewal: true,
+                stripeSubscriptionId: stripeSub.id,
+                stripePriceId: priceId,
+                stripeProductId: productId,
+            },
+            { upsert: true, new: true, session }
         );
 
-        const mailOptions = {
-            from: process.env.MAIL_USER,
-            to: user.email,
-            subject: subject,
-            html: body
-        };
+        const companyProfile = await CompanyProfile.findOne({ userId: userId });
+        await Promise.all([
+            User.findByIdAndUpdate(
+                userId,
+                { subscription_status: "active", subscription_id: dbSub._id },
+                { session }
+            ),
+            CompanyProfile.findOneAndUpdate(
+                { userId: userId },
+                { status: "Active" },
+                { session }
+            ),
+            Payment.create(
+                [
+                    {
+                        user_id: userId,
+                        subscription_id: dbSub._id,
+                        price: priceAmount,
+                        status: "Success",
+                        paid_at: invoice.status_transitions?.paid_at
+                            ? new Date(invoice.status_transitions.paid_at * 1000)
+                            : new Date(),
+                        transaction_id: invoice.payment_intent || invoice.id,
+                        payment_method: "stripe",
+                        companyName: companyProfile.companyName,
+                    },
+                ],
+                { session }
+            ),
+            Notification.create(
+                [
+                    {
+                        type: "Subscription",
+                        title: "Subscription Activated",
+                        description: `Plan ${plan.name} activated for ${user.email}`,
+                        created_at: new Date(),
+                    },
+                ],
+                { session }
+            ),
+        ]);
 
-        await transporter.sendMail(mailOptions);
-
-        return { success: true, message: 'Enterprise subscription activated successfully' };
-
+        await session.commitTransaction();
+        // Send payment confirmation email
+        const { subject, body } = await emailTemplates.getPaymentSuccessEmail(
+            user.fullName,
+            plan.name,
+            priceAmount,
+            billingCycle,
+            start,
+            end
+        );
+        await sendEmail(user.email, subject, body);
     } catch (err) {
-        return { success: false, error: err.message };
+        console.error("Error in activateSubscriptionFromStripe: ", err);
+        // Start a transaction to process the refund
+        const refundSession = await mongoose.startSession();
+        refundSession.startTransaction();
+        try {
+            // Process the refund
+            const refund = await stripe.refunds.create({
+                payment_intent: invoice.payment_intent || invoice.id,
+                reason: "requested_by_customer",
+            });
+            await Payment.create({
+                user_id: stripeSub.metadata?.userId,
+                subscription_id: null,
+                price: invoice.amount_due / 100,
+                status: "Pending Refund",
+                paid_at: new Date(),
+                transaction_id: invoice.payment_intent || invoice.id,
+                payment_method: "stripe",
+                refund_id: refund.id,
+                failure_reason: "Payment failed for subscription renewal",
+            }, { session: refundSession });
+            await refundSession.commitTransaction();
+        }
+        catch (refundError) {
+            console.error("Error in process refund: ", refundError);
+            await refundSession.abortTransaction();
+        }
+        finally {
+            refundSession.endSession();
+        }
+
+        await session.abortTransaction();
+    } finally {
+        session.endSession();
+    }
+};
+
+const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
+    const dbSession = await mongoose.startSession();
+    dbSession.startTransaction();
+
+    try {
+        const customPlanId = new URL(sessionObj.success_url).searchParams.get("customPlanId");
+        const user = await User.findOne({ email: sessionObj.customer_email });
+        const customPlan = await CustomPlan.findById(customPlanId);
+        if (!user || !customPlan) throw new Error("Custom plan or user not found");
+
+        await CustomPlan.findByIdAndUpdate(
+            customPlanId,
+            { status: "paid", paymentIntentId: sessionObj.payment_intent, paidAt: new Date() },
+            { session: dbSession }
+        );
+
+        const subscription = await Subscription.findOneAndUpdate(
+            { user_id: user._id },
+            {
+                plan_name: "Custom Enterprise Plan",
+                plan_price: sessionObj.amount_total / 100,
+                start_date: new Date(),
+                end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)),
+                renewal_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)),
+                max_editors: customPlan.maxEditors,
+                max_viewers: customPlan.maxViewers,
+                max_rfp_proposal_generations: customPlan.maxRFPProposalGenerations,
+                max_grant_proposal_generations: customPlan.maxGrantProposalGenerations,
+                auto_renewal: false,
+                stripeSubscriptionId: sessionObj.payment_intent || null,
+                stripePriceId: sessionObj.metadata.planPriceId || null,
+                stripeProductId: sessionObj.metadata.planProductId || null,
+            },
+            { upsert: true, new: true, session: dbSession }
+        );
+
+        await Payment.create(
+            [
+                {
+                    user_id: user._id,
+                    subscription_id: subscription._id,
+                    companyName: user.fullName,
+                    price: sessionObj.amount_total / 100,
+                    status: "Success",
+                    paid_at: new Date(),
+                    transaction_id: sessionObj.payment_intent,
+                    payment_method: "stripe",
+                },
+            ],
+            { session: dbSession }
+        );
+
+        await dbSession.commitTransaction();
+
+        await sendEmail(
+            user.email,
+            "Enterprise Plan Activated",
+            `<p>Your custom enterprise plan has been successfully activated.</p>`
+        );
+    } catch (err) {
+        await dbSession.abortTransaction();
+    } finally {
+        dbSession.endSession();
     }
 };
 
 const handleEnterpriseCheckoutSessionFailed = async (session) => {
     try {
-        const customPlanId = new URL(session.cancel_url).searchParams.get('customPlanId');
-        if (!customPlanId) return;
-
-        await CustomPlan.findByIdAndUpdate(customPlanId, {
-            status: 'failed',
-            paymentIntentId: session.payment_intent || session.id,
-            paidAt: new Date()
-        });
-
-        const user = await User.findOne({ email: session.customer_email });
-        if (!user || user.role !== "company") return;
-
-        await Notification.create({
-            user_id: user._id,
-            type: 'Subscription',
-            title: 'Enterprise Plan Payment Failed',
-            description: 'A payment for the custom Enterprise Plan failed for ' + user.email + '.',
-            created_at: new Date()
-        });
-
-        const transporter = nodemailer.createTransport({
-            host: "smtp.gmail.com",
-            port: 465,
-            secure: true,
-            auth: {
-                user: process.env.MAIL_USER,
-                pass: process.env.MAIL_PASS
-            }
-        });
-
-        const { subject, body } = await emailTemplates.getEnterprisePaymentFailedEmail(user.fullName || '');
-
-        const mailOptions = {
-            from: process.env.MAIL_USER,
-            to: user.email,
-            subject: subject,
-            html: body
-        };
-
-        await transporter.sendMail(mailOptions);
-
+        const customPlanId = new URL(session.cancel_url).searchParams.get("customPlanId");
+        if (customPlanId) {
+            await CustomPlan.findByIdAndUpdate(customPlanId, { status: "failed" });
+        }
     } catch (err) {
-        console.error('Error in handleWebhook:', err);
+        console.error("Error in handleEnterpriseCheckoutSessionFailed: ", err);
+    } finally {
+        return;
     }
 };
 
 const handleWebhook = async (req, res) => {
-    const sig = req.headers['stripe-signature'];
+    const sig = req.headers["stripe-signature"];
     const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
     let event;
     try {
         event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     } catch (err) {
-        console.error('Error in handleWebhook:', err);
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    const session = event.data.object;
+    const { type, data } = event;
+    const object = data.object;
 
     try {
-        switch (event.type) {
-            case 'checkout.session.completed':
-                // Check if it's a subscription checkout or enterprise checkout
-                if (session.mode === 'subscription') {
-                    await handleSubscriptionWebhook(event);
+        switch (type) {
+            case "checkout.session.completed":
+                if (object.mode === "subscription") {
+                    //We will handle the subscription activation in invoice.paid event
                 } else {
-                    await handleEnterpriseCheckoutSessionCompleted(session);
+                    //if the event custom plan checkout session completed
+                    await handleEnterpriseCheckoutSessionCompleted(object);
                 }
                 break;
 
-            case 'checkout.session.expired':
-                await handleEnterpriseCheckoutSessionFailed(session);
+            case "checkout.session.async_payment_failed":
+            case "checkout.session.expired":
+                await handleEnterpriseCheckoutSessionFailed(object);
                 break;
 
-            case 'checkout.session.async_payment_failed':
-                await handleEnterpriseCheckoutSessionFailed(session);
-                break;
-
-            case 'checkout.session.async_payment_succeeded':
-                if (session.mode === 'subscription') {
-                    await handleSubscriptionWebhook(event);
-                } else {
-                    await handleEnterpriseCheckoutSessionCompleted(session);
+            case "checkout.session.async_payment_succeeded":
+                if (object.mode !== "subscription") {
+                    await handleEnterpriseCheckoutSessionCompleted(object);
                 }
                 break;
 
-            // Subscription events
-            case 'invoice.paid':
-            case 'invoice.payment_failed':
-            case 'customer.subscription.updated':
-            case 'customer.subscription.deleted':
+            case "invoice.paid":
+            case "invoice.payment_failed":
+            case "customer.subscription.created":
+            case "customer.subscription.updated":
+            case "customer.subscription.deleted":
                 await handleSubscriptionWebhook(event);
                 break;
 
-            // Price update events
-            case 'price.updated':
-            case 'price.created': {
-                await handlePriceUpdate(event.data.object, event.type === 'price.created' ? 'created' : 'updated');
+            case "price.created":
+            case "price.updated":
+            case "price.deleted":
+                await handlePriceUpdate(object, type.replace("price.", ""));
                 break;
-            }
+
+            case "product.updated":
+                await handleProductUpdate(object);
+                break;
 
             default:
-                console.log(`Unhandled webhook event type: ${event.type}`);
+                console.log("Rejected webhook: ", type);
         }
 
-        res.status(200).json({ received: true });
-
-    } catch (error) {
-        console.error('Error in handleWebhook:', error);
-        res.status(500).json({ error: 'Webhook processing failed' });
+        return res.status(200).json({ received: true });
+    } catch (err) {
+        console.error("Error in handleWebhook: ", err);
+        return res.status(500).json({ error: "Webhook processing failed", message: err.message });
     }
+};
+
+const handlePriceUpdate = async (price, eventType = "updated") => {
+    try {
+        const amount = price.unit_amount / 100;
+        const priceId = price.id;
+
+        const plan = await SubscriptionPlan.findOne({
+            $or: [{ monthlyPriceId: priceId }, { yearlyPriceId: priceId }],
+        });
+        if (!plan) return;
+
+        const updateField = plan.monthlyPriceId === priceId ? "monthlyPrice" : "yearlyPrice";
+        if (plan[updateField] === amount) return;
+
+        await SubscriptionPlan.findByIdAndUpdate(plan._id, { [updateField]: amount });
+        await Notification.create({
+            type: "Price Update",
+            title: `Stripe Price ${eventType}`,
+            description: `Plan ${plan.name} (${updateField}) updated to $${amount}`,
+            created_at: new Date(),
+        });
+    } catch (err) {
+        console.error("handlePriceUpdate error:", err.message);
+    }
+};
+
+const handleProductUpdate = async (product) => {
+    console.log("Product updated: ", product);
 };
 
 module.exports = {
     createPaymentIntent,
-    activateSubscription,
-    processManualRefund,
-    getRefundStatus,
-    syncPricesFromStripe,
-    handleSubscriptionWebhook,
     handleWebhook,
-    activateSubscriptionFromStripe,
-    handlePriceUpdate
+    activateSubscription,
+    syncPricesFromStripe,
 };

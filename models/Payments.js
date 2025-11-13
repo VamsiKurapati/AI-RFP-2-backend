@@ -9,7 +9,8 @@ const paymentSchema = new mongoose.Schema({
   subscription_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Subscription",
-    required: true
+    required: false,
+    default: null
   },
   price: {
     type: Number,
