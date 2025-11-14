@@ -10,7 +10,6 @@ const { sendEmail } = require('../utils/mailSender');
 const emailTemplates = require('../utils/emailTemplates');
 const CustomPlan = require('../models/CustomPlan');
 
-// Stripe Configuration
 const STRIPE_CONFIG = {
     BILLING_CYCLES: {
         MONTHLY: 'monthly',
@@ -18,13 +17,11 @@ const STRIPE_CONFIG = {
     }
 };
 
-// Manual refund function for admin use
 const processManualRefund = async (req, res) => {
     try {
         const { paymentIntentId, reason, amount } = req.body;
         const userId = req.user._id;
 
-        // Validate required fields
         if (!paymentIntentId || !reason) {
             return res.status(400).json({
                 success: false,
@@ -32,7 +29,6 @@ const processManualRefund = async (req, res) => {
             });
         }
 
-        // Verify payment intent exists and get details
         let paymentIntent;
         try {
             paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
@@ -57,7 +53,6 @@ const processManualRefund = async (req, res) => {
             });
         }
 
-        // Check if already refunded
         const existingRefunds = await stripe.refunds.list({
             payment_intent: paymentIntentId
         });
@@ -70,7 +65,6 @@ const processManualRefund = async (req, res) => {
             });
         }
 
-        // Create refund
         const refundData = {
             payment_intent: paymentIntentId,
             reason: 'requested_by_customer',
@@ -81,9 +75,8 @@ const processManualRefund = async (req, res) => {
             }
         };
 
-        // Add amount if partial refund
         if (amount && amount > 0) {
-            refundData.amount = Math.round(amount * 100); // Convert to cents
+            refundData.amount = Math.round(amount * 100);
         }
 
         let refund;
@@ -96,7 +89,6 @@ const processManualRefund = async (req, res) => {
             });
         }
 
-        // Update payment record
         await Payment.findOneAndUpdate(
             { transaction_id: paymentIntentId },
             {
@@ -109,7 +101,6 @@ const processManualRefund = async (req, res) => {
             }
         );
 
-        // Cancel subscription if exists
         const subscription = await Subscription.findOne({
             stripeSubscriptionId: paymentIntentId
         });
@@ -122,10 +113,8 @@ const processManualRefund = async (req, res) => {
                 }
             });
 
-            //Update user subscription status
             await User.findByIdAndUpdate(subscription.user_id, { subscription_status: 'Inactive' }, { session });
 
-            // Update company profile subscription status
             await CompanyProfile.findOneAndUpdate({ userId: subscription.user_id }, { status: 'Inactive' }, { session });
         }
 
@@ -149,7 +138,6 @@ const processManualRefund = async (req, res) => {
     }
 };
 
-// Get refund status
 const getRefundStatus = async (req, res) => {
     try {
         const { paymentIntentId } = req.params;
@@ -161,7 +149,6 @@ const getRefundStatus = async (req, res) => {
             });
         }
 
-        // Get refunds for this payment intent
         let refunds;
         try {
             refunds = await stripe.refunds.list({
@@ -174,7 +161,6 @@ const getRefundStatus = async (req, res) => {
             });
         }
 
-        // Get payment record
         const payment = await Payment.findOne({ transaction_id: paymentIntentId });
 
         res.status(200).json({
@@ -193,7 +179,6 @@ const getRefundStatus = async (req, res) => {
     }
 };
 
-// Helper function to send refund notification email
 const sendRefundNotification = async (user, plan, refundId, errorMessage) => {
     try {
         const { subject, body } = await emailTemplates.getRefundNotificationEmail(
@@ -209,88 +194,73 @@ const sendRefundNotification = async (user, plan, refundId, errorMessage) => {
     }
 };
 
-// Sync prices from Stripe products to database
 const syncPricesFromStripe = async (req, res) => {
     try {
-        // Get all subscription plans from database
         const plans = await SubscriptionPlan.find();
-
-        if (!plans || plans.length === 0) {
+        if (!plans.length) {
             return res.status(404).json({
                 success: false,
-                message: 'No subscription plans found in database'
+                message: "No subscription plans found"
             });
         }
 
-        let updatedCount = 0;
+        let updated = 0;
         let errors = [];
 
-        // For each plan, fetch prices from Stripe
         for (const plan of plans) {
             try {
-                // Skip if price IDs are not set
-                if (!plan.monthlyPriceId && !plan.yearlyPriceId) {
+                const monthlyProduct = await stripe.products.retrieve(plan.stripeProductMonthlyId);
+                const yearlyProduct = await stripe.products.retrieve(plan.stripeProductYearlyId);
+
+                if (!monthlyProduct?.default_price || !yearlyProduct?.default_price) {
+                    errors.push(`Product missing default price for plan: ${plan.name}`);
                     continue;
                 }
 
-                let monthlyPrice = plan.monthlyPrice;
-                let yearlyPrice = plan.yearlyPrice;
+                const monthlyPriceId = monthlyProduct.default_price;
+                const yearlyPriceId = yearlyProduct.default_price;
 
-                // Fetch monthly price from Stripe if available
-                if (plan.monthlyPriceId) {
-                    try {
-                        const stripePrice = await stripe.prices.retrieve(plan.monthlyPriceId);
-                        monthlyPrice = stripePrice.unit_amount / 100; // Convert from cents to dollars
-                    } catch (error) {
-                        errors.push(`Failed to fetch monthly price for ${plan.name}: ${error.message}`);
-                    }
-                }
+                const monthlyPriceObj = await stripe.prices.retrieve(monthlyPriceId);
+                const yearlyPriceObj = await stripe.prices.retrieve(yearlyPriceId);
 
-                // Fetch yearly price from Stripe if available
-                if (plan.yearlyPriceId) {
-                    try {
-                        const stripePrice = await stripe.prices.retrieve(plan.yearlyPriceId);
-                        yearlyPrice = stripePrice.unit_amount / 100; // Convert from cents to dollars
-                    } catch (error) {
-                        errors.push(`Failed to fetch yearly price for ${plan.name}: ${error.message}`);
-                    }
-                }
+                const monthlyAmount = (monthlyPriceObj.unit_amount || 0) / 100;
+                const yearlyAmount = (yearlyPriceObj.unit_amount || 0) / 100;
 
-                // Update plan in database
                 await SubscriptionPlan.findByIdAndUpdate(plan._id, {
-                    monthlyPrice,
-                    yearlyPrice
+                    monthlyPriceId,
+                    yearlyPriceId,
+                    monthlyPrice: monthlyAmount,
+                    yearlyPrice: yearlyAmount
                 });
 
-                updatedCount++;
-            } catch (error) {
-                errors.push(`Error syncing ${plan.name}: ${error.message}`);
+                updated++;
+
+            } catch (err) {
+                errors.push(`Failed syncing plan ${plan.name}: ${err.message}`);
             }
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: `Successfully synced ${updatedCount} plan(s)`,
-            updatedCount,
-            errors: errors.length > 0 ? errors : undefined
+            message: `Synced ${updated} plan(s) successfully`,
+            updated,
+            errors
         });
 
-    } catch (error) {
-        res.status(500).json({
+    } catch (err) {
+        return res.status(500).json({
             success: false,
-            message: error.message || 'Failed to sync prices from Stripe',
-            error: error
+            message: "Failed syncing prices from Stripe",
+            error: err.message
         });
     }
 };
 
-// Activate Subscription
 const activateSubscription = async (req, res) => {
     try {
         const { paymentIntentId, planId, billingCycle } = req.body;
         const userId = req.user._id;
 
-        // Validate required fields
         if (!paymentIntentId || !planId || !billingCycle) {
             return res.status(400).json({
                 success: false,
@@ -298,7 +268,6 @@ const activateSubscription = async (req, res) => {
             });
         }
 
-        // Verify payment intent
         let paymentIntent;
         try {
             paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
@@ -313,7 +282,6 @@ const activateSubscription = async (req, res) => {
 
         if (paymentIntent.status !== 'succeeded') {
 
-            //Create payment record
             await Payment.create({
                 user_id: userId,
                 subscription_id: null,
@@ -328,9 +296,7 @@ const activateSubscription = async (req, res) => {
             });
         }
 
-        // Verify the payment intent belongs to this user
         if (paymentIntent.metadata.userId !== userId) {
-            //Create payment record
             await Payment.create({
                 user_id: userId,
                 subscription_id: null,
@@ -344,11 +310,9 @@ const activateSubscription = async (req, res) => {
             });
         }
 
-        // Validate plan and pricing again by _id
         const plan = await SubscriptionPlan.findById(planId);
 
         if (!plan) {
-            //Create payment record
             await Payment.create({
                 user_id: userId,
                 subscription_id: null,
@@ -362,9 +326,7 @@ const activateSubscription = async (req, res) => {
             });
         }
 
-        // Validate metadata and amount against DB pricing
         if (paymentIntent.metadata.planId !== planId || paymentIntent.metadata.billingCycle !== billingCycle) {
-            //Create payment record
             await Payment.create({
                 user_id: userId,
                 subscription_id: null,
@@ -382,7 +344,6 @@ const activateSubscription = async (req, res) => {
         const expectedAmountCents = Math.round(expectedAmount * 100);
 
         if (paymentIntent.amount !== expectedAmountCents) {
-            //Create payment record
             await Payment.create({
                 user_id: userId,
                 subscription_id: null,
@@ -396,7 +357,6 @@ const activateSubscription = async (req, res) => {
             });
         }
 
-        // Calculate subscription dates
         const startDate = new Date();
         const endDate = new Date();
 
@@ -423,7 +383,6 @@ const activateSubscription = async (req, res) => {
             newMaxGrant += unusedGrant;
         }
 
-        // Use transaction for data consistency with automatic refund on failure
         const session = await mongoose.startSession();
         session.startTransaction();
 
@@ -445,10 +404,10 @@ const activateSubscription = async (req, res) => {
                         renewal_date: endDate,
                         max_editors: plan.maxEditors,
                         max_viewers: plan.maxViewers,
-                        current_rfp_proposal_generations: 0, // reset usage
-                        current_grant_proposal_generations: 0, // reset usage
-                        max_rfp_proposal_generations: newMaxRfp, // ✅ directly set new total
-                        max_grant_proposal_generations: newMaxGrant, // ✅ directly set new total
+                        current_rfp_proposal_generations: 0,
+                        current_grant_proposal_generations: 0,
+                        max_rfp_proposal_generations: newMaxRfp,
+                        max_grant_proposal_generations: newMaxGrant,
                         canceled_at: null,
                         auto_renewal: true,
                         stripeSubscriptionId: paymentIntent.id,
@@ -458,51 +417,13 @@ const activateSubscription = async (req, res) => {
                 { upsert: true, new: true, session }
             );
 
-            // //Check the no.of edtors and viewers from subscription and delete the extra editors and viewers from the company profile, Employee profile, amd Users Database and update the company profile
-            // const companyProfile = await CompanyProfile.findById(userId);
-            // const employees = companyProfile.employees;
-            // let toBeDeletedEmployees = [];
-            // let toBeDeletedUsers = [];
-            // //Delete the extra editors and viewers from the employees
-            // for (const employee of employees) {
-            //     if (employee.accessLevel === "Editor" && subscription.max_editors < employees.length) {
-            //         toBeDeletedEmployees.push(employee.employeeId);
-            //         const employeeProfile = await EmployeeProfile.findById(employee.employeeId);
-            //         toBeDeletedEmployees.push(employeeProfile.userId);
-            //         toBeDeletedUsers.push(employeeProfile.userId);
-            //     }
-            //     if (employee.accessLevel === "Viewer" && subscription.max_viewers < employees.length) {
-            //         toBeDeletedEmployees.push(employee.employeeId);
-            //         const employeeProfile = await EmployeeProfile.findById(employee.employeeId);
-            //         toBeDeletedEmployees.push(employeeProfile.userId);
-            //         toBeDeletedUsers.push(employeeProfile.userId);
-            //     }
-            // }
-
-            // //Delete the extra editors and viewers from the employee PROFILES
-            // for (const employeeId of toBeDeletedEmployees) {
-            //     await EmployeeProfile.findByIdAndDelete(employeeId);
-            // }
-
-            // //Delete the extra editors and viewers from the users DATABASE
-            // for (const userId of toBeDeletedUsers) {
-            //     await User.findByIdAndDelete(userId);
-            // }
-
-            // //Update the company profile
-            // companyProfile.employees = companyProfile.employees.filter(employee => !toBeDeletedEmployees.includes(employee.employeeId));
-            // await companyProfile.save({ session });
-
-            // Update user subscription status
             await User.findByIdAndUpdate(userId, {
                 subscription_status: 'active',
                 subscription_id: subscription._id
             }, { session });
 
-            // Update company profile subscription status
             await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Active' }, { session });
 
-            // Create payment record
             await Payment.create([{
                 user_id: userId,
                 subscription_id: subscription._id,
@@ -516,10 +437,8 @@ const activateSubscription = async (req, res) => {
 
             await session.commitTransaction();
         } catch (error) {
-            // Abort database transaction
             await session.abortTransaction();
 
-            // Initiate automatic refund
             try {
                 const refund = await stripe.refunds.create({
                     payment_intent: paymentIntentId,
@@ -533,7 +452,6 @@ const activateSubscription = async (req, res) => {
                 });
 
                 refundId = refund.id;
-                // Create failed payment record with refund info
                 await Payment.create({
                     user_id: userId,
                     subscription_id: null,
@@ -547,12 +465,10 @@ const activateSubscription = async (req, res) => {
                     failure_reason: error.message
                 });
 
-                // Send refund notification email
                 await sendRefundNotification(req.user, plan, refundId, error.message);
 
             } catch (refundError) {
 
-                // Create payment record indicating refund failure
                 await Payment.create({
                     user_id: userId,
                     subscription_id: null,
@@ -565,7 +481,6 @@ const activateSubscription = async (req, res) => {
                     failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
                 });
 
-                // Update company profile subscription status
                 await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Inactive' }, { session });
             }
 
@@ -594,7 +509,6 @@ const activateSubscription = async (req, res) => {
 
         await sendEmail(req.user.email, subject, body);
 
-        // Update company profile subscription status
         await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Active' }, { session });
 
         res.status(200).json({
@@ -612,13 +526,11 @@ const activateSubscription = async (req, res) => {
     }
 };
 
-// Create Subscription Checkout Session (for auto-renewal)
 const createPaymentIntent = async (req, res) => {
     try {
         const { planId, billingCycle } = req.body;
         const userId = req.user._id;
 
-        //Enable only companies to create payment intent
         if (req.user.role !== 'company') {
             return res.status(403).json({
                 success: false,
@@ -626,21 +538,18 @@ const createPaymentIntent = async (req, res) => {
             });
         }
 
-        // Validate required fields
         if (!planId || !billingCycle) {
             return res.status(400).json({
                 success: false,
                 message: 'Missing required fields: planId, billingCycle'
             });
         }
-        // Validate billing cycle
         if (!Object.values(STRIPE_CONFIG.BILLING_CYCLES).includes(billingCycle)) {
             return res.status(400).json({
                 success: false,
                 message: 'Invalid billing cycle. Must be "monthly" or "yearly"'
             });
         }
-        // Get plan details from database by _id and verify pricing
         const plan = await SubscriptionPlan.findById(planId);
         if (!plan) {
             return res.status(400).json({
@@ -648,7 +557,6 @@ const createPaymentIntent = async (req, res) => {
                 message: 'Plan not found'
             });
         }
-        // Get Stripe Price ID based on billing cycle
         const stripePriceId = billingCycle === STRIPE_CONFIG.BILLING_CYCLES.YEARLY
             ? plan.yearlyPriceId
             : plan.monthlyPriceId;
@@ -658,7 +566,6 @@ const createPaymentIntent = async (req, res) => {
                 message: `Stripe price ID not configured for ${billingCycle} billing cycle`
             });
         }
-        // Get or create Stripe customer
         let user = await User.findById(userId);
         if (!user) {
             return res.status(404).json({
@@ -667,28 +574,22 @@ const createPaymentIntent = async (req, res) => {
             });
         }
         let stripeCustomerId = user.stripeCustomerId;
-        // Verify customer exists in Stripe if we have a customer ID
         if (stripeCustomerId) {
             try {
-                // Verify the customer exists in Stripe
                 const customer = await stripe.customers.retrieve(stripeCustomerId);
                 if (!customer || customer.deleted) {
-                    stripeCustomerId = null; // Reset to create new customer
+                    stripeCustomerId = null;
                 }
             } catch (stripeError) {
-                // If customer doesn't exist (404) or is deleted, create a new one
                 if (stripeError.code === 'resource_missing' || stripeError.statusCode === 404) {
-                    stripeCustomerId = null; // Reset to create new customer
+                    stripeCustomerId = null;
                 } else {
-                    // For other errors, log and continue to try creating a new customer
                     stripeCustomerId = null;
                 }
             }
         }
-        // Create new customer if we don't have a valid one
         if (!stripeCustomerId) {
             try {
-                // Create Stripe customer
                 const customer = await stripe.customers.create({
                     email: user.email,
                     metadata: {
@@ -715,7 +616,6 @@ const createPaymentIntent = async (req, res) => {
                 message: 'Stripe product ID not configured for this plan'
             });
         }
-        //Retrieve the product details from the plan
         const product = await stripe.products.retrieve(stripeProductId);
         if (!product) {
             return res.status(400).json({
@@ -723,10 +623,8 @@ const createPaymentIntent = async (req, res) => {
                 message: 'Product not found'
             });
         }
-        // Create subscription checkout session for auto-renewal
         let checkoutSession;
         try {
-            // Get the frontend URL from environment or use a default
             const frontendUrl = process.env.FRONTEND_URL;
 
             checkoutSession = await stripe.checkout.sessions.create({
@@ -759,10 +657,9 @@ const createPaymentIntent = async (req, res) => {
                 }
             });
         } catch (stripeError) {
-            console.error('Failed to create checkout session:', stripeError);
             return res.status(500).json({
                 success: false,
-                message: 'Failed to create checkout session'
+                message: `Failed to create checkout session: ${stripeError.message}`
             });
         }
 
@@ -789,7 +686,6 @@ const handleSubscriptionWebhook = async (event) => {
         switch (type) {
             case "invoice.paid": {
                 const invoice = stripeObject;
-                // Avoid duplicates
                 const exists = await Payment.findOne({
                     transaction_id: invoice.payment_intent || invoice.id,
                     status: "Success",
@@ -919,6 +815,12 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
             User.findById(userId),
         ]);
         if (!plan || !user) throw new Error("User or plan not found");
+
+        //Get all existing subscriptions for the user from stripe
+        const existingSubscriptions = await stripe.subscriptions.list({
+            customer: user.stripeCustomerId,
+        });
+
         const priceAmount = stripeSub.items.data[0]?.price?.unit_amount / 100 || 0;
         const priceId = stripeSub.items.data[0]?.price?.id;
         const startUnix = stripeSub.items.data[0].current_period_start;
@@ -955,7 +857,7 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
         await Promise.all([
             User.findByIdAndUpdate(
                 userId,
-                { subscription_status: "active", subscription_id: dbSub._id },
+                { subscription_status: "active", subscription_id: dbSub._id, stripeSubscriptionId: stripeSub.id },
                 { session }
             ),
             CompanyProfile.findOneAndUpdate(
@@ -994,7 +896,20 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
         ]);
 
         await session.commitTransaction();
-        // Send payment confirmation email
+
+        // Cancel only previous subscriptions — NOT the current one
+        await Promise.all(
+            existingSubscriptions.data.map(async (sub) => {
+                if (sub.id !== stripeSub.id) {
+                    try {
+                        await stripe.subscriptions.cancel(sub.id);
+                    } catch (err) {
+                        console.error("Error cancelling old subscription:", err.message);
+                    }
+                }
+            })
+        );
+
         const { subject, body } = await emailTemplates.getPaymentSuccessEmail(
             user.fullName,
             plan.name,
@@ -1005,38 +920,156 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
         );
         await sendEmail(user.email, subject, body);
     } catch (err) {
-        console.error("Error in activateSubscriptionFromStripe: ", err);
-        // Start a transaction to process the refund
         const refundSession = await mongoose.startSession();
         refundSession.startTransaction();
+        let transactionId = null;
+
         try {
-            // Process the refund
-            const refund = await stripe.refunds.create({
-                payment_intent: invoice.payment_intent || invoice.id,
-                reason: "requested_by_customer",
-            });
-            await Payment.create({
-                user_id: stripeSub.metadata?.userId,
-                subscription_id: null,
-                price: invoice.amount_due / 100,
-                status: "Pending Refund",
-                paid_at: new Date(),
-                transaction_id: invoice.payment_intent || invoice.id,
-                payment_method: "stripe",
-                refund_id: refund.id,
-                failure_reason: "Payment failed for subscription renewal",
-            }, { session: refundSession });
+            const invoiceStatus = invoice.status || (await stripe.invoices.retrieve(invoice.id)).status;
+
+            if (invoiceStatus !== "paid") {
+                await refundSession.abortTransaction();
+                return;
+            }
+
+            let refundParams = { reason: "requested_by_customer" };
+            transactionId = invoice.id;
+
+            if (invoice.payment_intent) {
+                const pi = typeof invoice.payment_intent === "string"
+                    ? invoice.payment_intent
+                    : invoice.payment_intent.id;
+
+                refundParams.payment_intent = pi;
+                transactionId = pi;
+            }
+
+            else if (invoice.charge) {
+                const charge = typeof invoice.charge === "string"
+                    ? invoice.charge
+                    : invoice.charge.id;
+
+                refundParams.charge = charge;
+                transactionId = charge;
+            }
+
+            else {
+                const expandedInvoice = await stripe.invoices.retrieve(invoice.id, {
+                    expand: ["payment_intent", "charge", "charge.payment_intent"],
+                });
+
+                if (expandedInvoice.payment_intent) {
+                    const pi = typeof expandedInvoice.payment_intent === "string"
+                        ? expandedInvoice.payment_intent
+                        : expandedInvoice.payment_intent.id;
+
+                    refundParams.payment_intent = pi;
+                    transactionId = pi;
+                } else if (expandedInvoice.charge) {
+                    const chargeObj = expandedInvoice.charge;
+
+                    if (chargeObj.payment_intent) {
+                        const pi = typeof chargeObj.payment_intent === "string"
+                            ? chargeObj.payment_intent
+                            : chargeObj.payment_intent.id;
+
+                        refundParams.payment_intent = pi;
+                        transactionId = pi;
+                    } else {
+                        refundParams.charge = chargeObj.id;
+                        transactionId = chargeObj.id;
+                    }
+                } else {
+                    const customerId =
+                        typeof stripeSub.customer === "string"
+                            ? stripeSub.customer
+                            : stripeSub.customer.id;
+
+                    const charges = await stripe.charges.list({
+                        customer: customerId,
+                        limit: 10,
+                    });
+
+                    const invoiceDate = invoice.created || Math.floor(Date.now() / 1000);
+
+                    const matchingCharge = charges.data.find((c) => {
+                        const timeDiff = Math.abs(c.created - invoiceDate);
+                        return c.amount === invoice.amount_due && timeDiff < 3600;
+                    });
+
+                    if (matchingCharge) {
+                        if (matchingCharge.payment_intent) {
+                            refundParams.payment_intent =
+                                typeof matchingCharge.payment_intent === "string"
+                                    ? matchingCharge.payment_intent
+                                    : matchingCharge.payment_intent.id;
+
+                            transactionId = refundParams.payment_intent;
+                        } else {
+                            refundParams.charge = matchingCharge.id;
+                            transactionId = matchingCharge.id;
+                        }
+                    }
+                }
+            }
+
+            if (!refundParams.payment_intent && !refundParams.charge) {
+                await Payment.create(
+                    [
+                        {
+                            user_id: stripeSub.metadata?.userId,
+                            subscription_id: null,
+                            price: invoice.amount_due / 100,
+                            status: "Failed - Refund Required",
+                            paid_at: new Date(),
+                            transaction_id: invoice.id,
+                            payment_method: "stripe",
+                            failure_reason:
+                                `Refund required but no payment_intent/charge found. Error: ${err.message}`,
+                        },
+                    ],
+                    { session: refundSession }
+                );
+
+                await refundSession.commitTransaction();
+                return;
+            }
+
+            const refund = await stripe.refunds.create(refundParams);
+
+            const paymentRecord = await Payment.create(
+                [
+                    {
+                        user_id: stripeSub.metadata?.userId,
+                        subscription_id: null,
+                        price: invoice.amount_due / 100,
+                        status: "Pending Refund",
+                        paid_at: new Date(),
+                        transaction_id: transactionId,
+                        payment_method: "stripe",
+                        refund_id: refund.id,
+                        failure_reason: err.message,
+                    },
+                ],
+                { session: refundSession }
+            );
+
             await refundSession.commitTransaction();
-        }
-        catch (refundError) {
-            console.error("Error in process refund: ", refundError);
+
+            const userId = stripeSub.metadata?.userId;
+            const planId = stripeSub.metadata?.planId;
+            const user = await User.findById(userId);
+            const plan = await SubscriptionPlan.findById(planId);
+            if (!user || !plan || !transactionId) {
+                return;
+            }
+
+            await sendRefundNotification(user, plan, transactionId, "Encountered an error while activating the subscription.");
+        } catch (refundError) {
             await refundSession.abortTransaction();
-        }
-        finally {
+        } finally {
             refundSession.endSession();
         }
-
-        await session.abortTransaction();
     } finally {
         session.endSession();
     }
@@ -1052,8 +1085,13 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
         const customPlan = await CustomPlan.findById(customPlanId);
         if (!user || !customPlan) throw new Error("Custom plan or user not found");
 
+        //Get all existing subscriptions for the user from stripe
+        const subscriptions = await stripe.subscriptions.list({
+            customer: user.stripeCustomerId,
+        });
+
         await CustomPlan.findByIdAndUpdate(
-            customPlanId,
+            // customPlanId,
             { status: "paid", paymentIntentId: sessionObj.payment_intent, paidAt: new Date() },
             { session: dbSession }
         );
@@ -1096,13 +1134,137 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
 
         await dbSession.commitTransaction();
 
-        await sendEmail(
-            user.email,
-            "Enterprise Plan Activated",
-            `<p>Your custom enterprise plan has been successfully activated.</p>`
+        // Cancel only previous subscriptions — NOT the current one
+        await Promise.all(
+            existingSubscriptions.data.map(async (sub) => {
+                if (sub.id !== stripeSub.id) {
+                    try {
+                        await stripe.subscriptions.cancel(sub.id);
+                    } catch (err) {
+                        console.error("Error cancelling old subscription:", err.message);
+                    }
+                }
+            })
         );
+
+
+        const { subject, body } = await emailTemplates.getEnterprisePaymentSuccessEmail(
+            user.fullName,
+            customPlan.planType || "Custom Enterprise Plan",
+            sessionObj.amount_total / 100,
+            customPlan.maxEditors,
+            customPlan.maxViewers,
+            customPlan.maxRFPProposalGenerations,
+            customPlan.maxGrantProposalGenerations
+        );
+        await sendEmail(user.email, subject, body);
     } catch (err) {
         await dbSession.abortTransaction();
+
+        // Process refund if payment was successful
+        const refundSession = await mongoose.startSession();
+        refundSession.startTransaction();
+
+        try {
+            // Get payment intent from session or retrieve it
+            let refundParams = { reason: "requested_by_customer" };
+            let transactionId = sessionObj.id;
+
+            // Check if payment_intent is available in session
+            if (sessionObj.payment_intent) {
+                // If it's an object, get the ID
+                refundParams.payment_intent = typeof sessionObj.payment_intent === "string"
+                    ? sessionObj.payment_intent
+                    : sessionObj.payment_intent.id;
+                transactionId = refundParams.payment_intent;
+            } else {
+                // Try to retrieve the checkout session to get payment intent
+                try {
+                    const retrievedSession = await stripe.checkout.sessions.retrieve(sessionObj.id, {
+                        expand: ["payment_intent"]
+                    });
+
+                    if (retrievedSession.payment_intent) {
+                        const paymentIntentId = typeof retrievedSession.payment_intent === "string"
+                            ? retrievedSession.payment_intent
+                            : retrievedSession.payment_intent.id;
+                        refundParams.payment_intent = paymentIntentId;
+                        transactionId = paymentIntentId;
+                    } else {
+                        throw new Error("No payment_intent found on checkout session");
+                    }
+                } catch (retrieveError) {
+                    throw new Error("Could not retrieve payment information for refund");
+                }
+            }
+
+            // Create refund
+            const refund = await stripe.refunds.create(refundParams);
+
+            // Get user and custom plan info for payment record
+            const customPlanId = sessionObj.success_url ? new URL(sessionObj.success_url).searchParams.get("customPlanId") : null;
+            const user = sessionObj.customer_email ? await User.findOne({ email: sessionObj.customer_email }) : null;
+
+            // Create payment record with refund status
+            if (user) {
+                await Payment.create(
+                    [
+                        {
+                            user_id: user._id,
+                            subscription_id: null,
+                            price: (sessionObj.amount_total || 0) / 100,
+                            status: "Pending Refund",
+                            paid_at: new Date(),
+                            transaction_id: transactionId,
+                            payment_method: "stripe",
+                            refund_id: refund.id,
+                            failure_reason: `Enterprise plan activation failed: ${err.message}`,
+                        },
+                    ],
+                    { session: refundSession }
+                );
+            }
+
+            await refundSession.commitTransaction();
+            const plan = await CustomPlan.findById(customPlanId);
+            if (!customPlanId || !plan) {
+                return;
+            }
+            await sendRefundNotification(user, plan, sessionObj.payment_intent || sessionObj.id, `Encountered an error while activating the enterprise plan.`);
+        } catch (refundError) {
+            // Try to create payment record even if refund fails
+            try {
+                const customPlanId = sessionObj.success_url ? new URL(sessionObj.success_url).searchParams.get("customPlanId") : null;
+                const user = sessionObj.customer_email ? await User.findOne({ email: sessionObj.customer_email }) : null;
+
+                if (user) {
+                    await Payment.create(
+                        [
+                            {
+                                user_id: user._id,
+                                subscription_id: null,
+                                price: (sessionObj.amount_total || 0) / 100,
+                                status: "Failed - Refund Required",
+                                paid_at: new Date(),
+                                transaction_id: sessionObj.payment_intent || sessionObj.id,
+                                payment_method: "stripe",
+                                failure_reason: `Enterprise plan activation failed. Refund required but could not process: ${refundError.message}. Original error: ${err.message}`,
+                            },
+                        ],
+                        { session: refundSession }
+                    );
+                    await refundSession.commitTransaction();
+
+                    await sendRefundNotification(user, plan, sessionObj.payment_intent || sessionObj.id, `Enterprise plan activation failed. Refund required but could not process. Manual refund required.`);
+                } else {
+                    await refundSession.abortTransaction();
+                }
+            } catch (paymentRecordError) {
+                await refundSession.abortTransaction();
+            }
+        } finally {
+            refundSession.endSession();
+        }
     } finally {
         dbSession.endSession();
     }
@@ -1139,9 +1301,7 @@ const handleWebhook = async (req, res) => {
         switch (type) {
             case "checkout.session.completed":
                 if (object.mode === "subscription") {
-                    //We will handle the subscription activation in invoice.paid event
                 } else {
-                    //if the event custom plan checkout session completed
                     await handleEnterpriseCheckoutSessionCompleted(object);
                 }
                 break;
@@ -1157,6 +1317,15 @@ const handleWebhook = async (req, res) => {
                 }
                 break;
 
+            case "product.updated":
+                await handleProductUpdate(object);
+                break;
+
+            case "price.created":
+            case "price.updated":
+                await handlePriceUpdate(object);
+                break;
+
             case "invoice.paid":
             case "invoice.payment_failed":
             case "customer.subscription.created":
@@ -1165,54 +1334,181 @@ const handleWebhook = async (req, res) => {
                 await handleSubscriptionWebhook(event);
                 break;
 
-            case "price.created":
-            case "price.updated":
-            case "price.deleted":
-                await handlePriceUpdate(object, type.replace("price.", ""));
-                break;
-
-            case "product.updated":
-                await handleProductUpdate(object);
-                break;
-
             default:
-                console.log("Rejected webhook: ", type);
+                console.log("Unhandled webhook: ", type);
         }
 
         return res.status(200).json({ received: true });
     } catch (err) {
-        console.error("Error in handleWebhook: ", err);
-        return res.status(500).json({ error: "Webhook processing failed", message: err.message });
+        return res.status(500).json({ error: "Webhook processing failed", message: `Webhook processing failed: ${err.message}` });
     }
 };
 
-const handlePriceUpdate = async (price, eventType = "updated") => {
+const handlePriceUpdate = async (price) => {
     try {
-        const amount = price.unit_amount / 100;
         const priceId = price.id;
 
+        const product = await stripe.products.retrieve(price.product);
+        if (!product.default_price) return;
+
+        if (product.default_price !== priceId) return;
+
         const plan = await SubscriptionPlan.findOne({
-            $or: [{ monthlyPriceId: priceId }, { yearlyPriceId: priceId }],
+            $or: [
+                { stripeProductMonthlyId: product.id },
+                { stripeProductYearlyId: product.id }
+            ]
         });
+
         if (!plan) return;
 
-        const updateField = plan.monthlyPriceId === priceId ? "monthlyPrice" : "yearlyPrice";
-        if (plan[updateField] === amount) return;
+        const amount = price.unit_amount / 100;
 
-        await SubscriptionPlan.findByIdAndUpdate(plan._id, { [updateField]: amount });
-        await Notification.create({
-            type: "Price Update",
-            title: `Stripe Price ${eventType}`,
-            description: `Plan ${plan.name} (${updateField}) updated to $${amount}`,
-            created_at: new Date(),
-        });
+        if (plan.stripeProductMonthlyId === product.id) {
+            await SubscriptionPlan.findByIdAndUpdate(plan._id, {
+                monthlyPrice: amount,
+                monthlyPriceId: priceId
+            });
+        }
+
+        if (plan.stripeProductYearlyId === product.id) {
+            await SubscriptionPlan.findByIdAndUpdate(plan._id, {
+                yearlyPrice: amount,
+                yearlyPriceId: priceId
+            });
+        }
+
+        console.log(`Price synced for ${plan.name}`);
+
     } catch (err) {
         console.error("handlePriceUpdate error:", err.message);
     }
 };
 
+const updatePriceFromStripe = async (plan, priceAmountField, priceIdField, stripePriceId) => {
+    try {
+        const stripePrice = await stripe.prices.retrieve(stripePriceId);
+
+        if (!stripePrice || !stripePrice.unit_amount) return;
+
+        const amount = stripePrice.unit_amount / 100;
+
+        await SubscriptionPlan.findByIdAndUpdate(plan._id, {
+            [priceAmountField]: amount,
+            [priceIdField]: stripePriceId
+        });
+
+        await Notification.create({
+            type: "Price Update",
+            title: `Default Price Updated`,
+            description: `Plan '${plan.name}' → New ${priceAmountField} = $${amount}`,
+            created_at: new Date()
+        });
+
+        console.log(`Updated ${priceAmountField} for ${plan.name} → $${amount}`);
+
+    } catch (err) {
+        console.error("updatePriceFromStripe error:", err.message);
+    }
+};
+
+const migrateSubscribersToNewPrice = async (plan, newPriceId, priceAmountField, newAmount) => {
+    try {
+        const subscribers = await Subscription.find({
+            plan_name: plan.name,
+            auto_renewal: true,
+            canceled_at: null,
+            stripeSubscriptionId: { $ne: null },
+            stripePriceId: { $ne: newPriceId }
+        });
+
+        for (const sub of subscribers) {
+            try {
+                // 1. Retrieve subscription from Stripe
+                const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
+
+                if (!stripeSub.items.data.length) continue;
+
+                const item = stripeSub.items.data[0];
+
+                // 2. Update subscription item to new price
+                await stripe.subscriptions.update(stripeSub.id, {
+                    items: [{ id: item.id, price: newPriceId }],
+                    proration_behavior: "none"
+                });
+
+                // 3. Update local DB subscription record
+                await Subscription.findByIdAndUpdate(sub._id, {
+                    stripePriceId: newPriceId,
+                    plan_price: newAmount
+                });
+
+            } catch (err) {
+                console.error("Migration failed:", err.message);
+                continue;
+            }
+        }
+
+        console.log(`Migrated ${subscribers.length} subscribers to new price.`);
+    } catch (err) {
+        console.error("migrateSubscribersToNewPrice error:", err.message);
+    }
+};
+
 const handleProductUpdate = async (product) => {
-    console.log("Product updated: ", product);
+    try {
+        const productId = product.id;
+        const defaultPriceId = product.default_price;
+
+        if (!defaultPriceId) return;
+
+        const plan = await SubscriptionPlan.findOne({
+            $or: [
+                { stripeProductMonthlyId: productId },
+                { stripeProductYearlyId: productId }
+            ],
+        });
+        if (!plan) return;
+
+        // MONTHLY PRODUCT UPDATED
+        if (plan.stripeProductMonthlyId === productId) {
+            await updatePriceFromStripe(plan, "monthlyPrice", "monthlyPriceId", defaultPriceId);
+
+            const priceData = await stripe.prices.retrieve(defaultPriceId);
+            const newAmount = priceData?.unit_amount ? priceData.unit_amount / 100 : null;
+
+            // Migrate active subscribers to the new monthly price
+            if (newAmount !== null) {
+                await migrateSubscribersToNewPrice(
+                    plan,
+                    defaultPriceId,
+                    "monthlyPrice",
+                    newAmount
+                );
+            }
+        }
+
+        // YEARLY PRODUCT UPDATED
+        if (plan.stripeProductYearlyId === productId) {
+            await updatePriceFromStripe(plan, "yearlyPrice", "yearlyPriceId", defaultPriceId);
+
+            const priceData = await stripe.prices.retrieve(defaultPriceId);
+            const newAmount = priceData?.unit_amount ? priceData.unit_amount / 100 : null;
+
+            // Migrate active subscribers to the new yearly price
+            if (newAmount !== null) {
+                await migrateSubscribersToNewPrice(
+                    plan,
+                    defaultPriceId,
+                    "yearlyPrice",
+                    newAmount
+                );
+            }
+        }
+
+    } catch (err) {
+        console.error("handleProductUpdate error:", err.message);
+    }
 };
 
 module.exports = {
