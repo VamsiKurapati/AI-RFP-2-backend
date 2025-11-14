@@ -12,6 +12,11 @@ const paymentSchema = new mongoose.Schema({
     required: false,
     default: null
   },
+  planName: {
+    type: String,
+    required: false,
+    default: null
+  },
   price: {
     type: Number,
     required: true

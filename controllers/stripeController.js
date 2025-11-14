@@ -731,6 +731,14 @@ const handleSubscriptionWebhook = async (event) => {
                     await User.findByIdAndUpdate(userId, { subscription_status: "inactive" }, { session });
                     await CompanyProfile.findOneAndUpdate({ userId }, { status: "Past Due" }, { session });
 
+                    let planName = null;
+                    if (!stripeSub.metadata?.planName && stripeSub.metadata?.planId) {
+                        const subscription = await Subscription.findOne({ stripeSubscriptionId: stripeSub.metadata?.planId }, { plan_name: 1 });
+                        planName = subscription?.plan_name || null;
+                    } else {
+                        planName = stripeSub.metadata?.planName || null;
+                    }
+
                     await Payment.create(
                         [
                             {
@@ -738,6 +746,7 @@ const handleSubscriptionWebhook = async (event) => {
                                 subscription_id: null,
                                 price: invoice.amount_due / 100,
                                 status: "Failed",
+                                planName: planName || null,
                                 paid_at: new Date(),
                                 transaction_id: invoice.payment_intent || invoice.id,
                                 payment_method: "stripe",
@@ -872,6 +881,7 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
                         subscription_id: dbSub._id,
                         price: priceAmount,
                         status: "Success",
+                        planName: planName || null,
                         paid_at: invoice.status_transitions?.paid_at
                             ? new Date(invoice.status_transitions.paid_at * 1000)
                             : new Date(),
@@ -1014,12 +1024,20 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
             }
 
             if (!refundParams.payment_intent && !refundParams.charge) {
+                let planName = null;
+                if (!stripeSub.metadata?.planName && stripeSub.metadata?.planId) {
+                    const subscription = await Subscription.findOne({ stripeSubscriptionId: stripeSub.metadata?.planId }, { plan_name: 1 });
+                    planName = subscription?.plan_name || null;
+                } else {
+                    planName = stripeSub.metadata?.planName || null;
+                }
                 await Payment.create(
                     [
                         {
                             user_id: stripeSub.metadata?.userId,
                             subscription_id: null,
                             price: invoice.amount_due / 100,
+                            planName: planName || null,
                             status: "Failed - Refund Required",
                             paid_at: new Date(),
                             transaction_id: invoice.id,
@@ -1037,12 +1055,21 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
 
             const refund = await stripe.refunds.create(refundParams);
 
+            let planName = null;
+            if (!stripeSub.metadata?.planName && stripeSub.metadata?.planId) {
+                const subscription = await Subscription.findOne({ stripeSubscriptionId: stripeSub.metadata?.planId }, { plan_name: 1 });
+                planName = subscription?.plan_name || null;
+            } else {
+                planName = stripeSub.metadata?.planName || null;
+            }
+
             const paymentRecord = await Payment.create(
                 [
                     {
                         user_id: stripeSub.metadata?.userId,
                         subscription_id: null,
                         price: invoice.amount_due / 100,
+                        planName: planName || null,
                         status: "Pending Refund",
                         paid_at: new Date(),
                         transaction_id: transactionId,
@@ -1121,6 +1148,7 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
                 {
                     user_id: user._id,
                     subscription_id: subscription._id,
+                    planName: "Custom Enterprise Plan",
                     companyName: user.fullName,
                     price: sessionObj.amount_total / 100,
                     status: "Success",
@@ -1213,6 +1241,7 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
                             user_id: user._id,
                             subscription_id: null,
                             price: (sessionObj.amount_total || 0) / 100,
+                            planName: "Custom Enterprise Plan",
                             status: "Pending Refund",
                             paid_at: new Date(),
                             transaction_id: transactionId,
@@ -1244,6 +1273,7 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
                                 user_id: user._id,
                                 subscription_id: null,
                                 price: (sessionObj.amount_total || 0) / 100,
+                                planName: "Custom Enterprise Plan",
                                 status: "Failed - Refund Required",
                                 paid_at: new Date(),
                                 transaction_id: sessionObj.payment_intent || sessionObj.id,

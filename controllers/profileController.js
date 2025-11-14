@@ -1220,31 +1220,15 @@ exports.getPaymentById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const payment = await Payment.findOne({
+        const payments = await Payment.find({
             user_id: id
         });
-        if (!payment) {
-            return res.status(404).json({ message: "Payment not found" });
+
+        if (payments.length === 0) {
+            return res.status(404).json({ message: "Payments not found" });
         }
 
-
-        let planName = "Unknown Plan";
-        if (payment.subscription_id) {
-            const subscription = await Subscription.findById(
-                payment.subscription_id,
-                { plan_name: 1 }
-            );
-            if (subscription) {
-                planName = subscription.plan_name;
-            }
-        }
-
-        const paymentWithDetails = {
-            ...payment.toObject(),
-            planName
-        };
-
-        res.json(paymentWithDetails);
+        res.status(200).json(payments);
     } catch (err) {
         res.status(500).json({
             message: "Error fetching payment by ID",
