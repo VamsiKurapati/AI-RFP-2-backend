@@ -1161,4 +1161,55 @@ exports.getSubscriptionDeactivatedEmail = async (fullName, email, noteFromAdmin)
         subject: 'User Subscription Deactivated!',
         body: getBaseTemplate(content, 'User Subscription Deactivated!')
     };
-};  
+};
+
+// Add-on Activated Email Template
+exports.getAddOnActivatedEmail = async (fullName, addOnName, addOnPrice) => {
+    const emailContent = await getEmailContentFromDB('addOnActivated');
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            addOnName: addOnName,
+            addOnPrice: addOnPrice,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const content = `
+        <div style="${styles.greeting}">Add-on Activated! 🎉</div>
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+        
+        <div style="${styles.successBox}">
+            <p style="margin:0; color:#15803D; font-weight:600;">✅ Your add-on "<strong style="color:#0f172a;">${addOnName}</strong>" has been successfully activated!</p>
+        </div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 16px 0; color:#1E40AF; font-weight:600; font-size:18px;">📦 Add-on Details</p>
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Add-on Name</div>
+                <div style="${styles.infoValue}">${addOnName}</div>
+            </div>
+            <div style="padding:10px 0;">
+                <div style="${styles.infoLabel}">Price</div>
+                <div style="${styles.infoValue}"><span style="color:#15803D;">$${addOnPrice}</span></div>
+            </div>
+        </div>
+
+        <p style="${styles.message}">You can now access all the features included with this add-on. Login to your account to get started!</p>
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">Go to Dashboard →</a>
+        </div>
+
+        <p style="${styles.message}">Thank you for choosing RFP2GRANTS!</p>
+    `;
+
+    return {
+        subject: 'Add-on Activated!',
+        body: getBaseTemplate(content, 'Add-on Activated!')
+    };
+};
