@@ -15,6 +15,7 @@ const GrantProposal = require("../models/GrantProposal");
 const EmployeeProfile = require("../models/EmployeeProfile");
 const emailTemplates = require("../utils/emailTemplates");
 const EmailContent = require("../models/EmailContent");
+const AddOnPlan = require("../models/AddOnPlan");
 
 const { sendEmail } = require("../utils/mailSender");
 
@@ -1258,5 +1259,158 @@ exports.bulkDeactivateSubscriptions = async (req, res) => {
       console.error('Error in bulkDeactivateUserSubscriptions:', error);
       res.status(500).json({ message: "Error deactivating user subscriptions", error: error.message });
     }
+  }
+};
+
+// Create a new add-on plan (SuperAdmin only)
+exports.createAddOnPlan = async (req, res) => {
+  try {
+    const { name, description, price, type, quantity, popular } = req.body;
+
+    // Validation
+    if (!name || !price || !type || !quantity) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: {
+          name: name ? undefined : "Name is required",
+          price: price ? undefined : "Price is required",
+          type: type ? undefined : "Type is required",
+          quantity: quantity ? undefined : "Quantity is required"
+        }
+      });
+    }
+
+    if (typeof price !== 'number' || price < 0) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: {
+          price: "Price must be a positive number"
+        }
+      });
+    }
+
+    if (typeof quantity !== 'number' || quantity < 1) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: {
+          quantity: "Quantity must be a positive number"
+        }
+      });
+    }
+
+    // Check if add-on with same name already exists
+    const existingAddOn = await AddOnPlan.findOne({ name: name.trim() });
+    if (existingAddOn) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: {
+          name: "Add-on with this name already exists"
+        }
+      });
+    }
+
+    const addOn = await AddOnPlan.create({
+      name: name.trim(),
+      description: description || '',
+      price: price,
+      type: type,
+      quantity: quantity,
+      popular: popular || false,
+      isActive: true
+    });
+
+    res.status(201).json(addOn);
+  } catch (error) {
+    console.error('Error in createAddOnPlan:', error);
+    res.status(500).json({ message: "Error creating add-on plan", error: error.message });
+  }
+};
+
+// Update an existing add-on plan (SuperAdmin only)
+exports.updateAddOnPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, price, type, quantity, popular, isActive } = req.body;
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid add-on ID format" });
+    }
+
+    const addOn = await AddOnPlan.findById(id);
+    if (!addOn) {
+      return res.status(404).json({ message: "Add-on not found" });
+    }
+
+    // Validation
+    if (price !== undefined && (typeof price !== 'number' || price < 0)) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: {
+          price: "Price must be a positive number"
+        }
+      });
+    }
+
+    // Check if name is being changed and if it conflicts with another add-on
+    if (name && name.trim() !== addOn.name) {
+      const existingAddOn = await AddOnPlan.findOne({ name: name.trim(), _id: { $ne: id } });
+      if (existingAddOn) {
+        return res.status(400).json({
+          message: "Validation error",
+          errors: {
+            name: "Add-on with this name already exists"
+          }
+        });
+      }
+    }
+
+    // Update fields
+    const updateData = {};
+    if (name !== undefined) updateData.name = name.trim();
+    if (description !== undefined) updateData.description = description || '';
+    if (price !== undefined) updateData.price = price;
+    if (type !== undefined) updateData.type = type;
+    if (quantity !== undefined) updateData.quantity = quantity;
+    if (popular !== undefined) updateData.popular = popular;
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    const updatedAddOn = await AddOnPlan.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json(updatedAddOn);
+  } catch (error) {
+    console.error('Error in updateAddOnPlan:', error);
+    res.status(500).json({ message: "Error updating add-on plan", error: error.message });
+  }
+};
+
+// Delete an add-on plan (SuperAdmin only)
+exports.deleteAddOnPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid add-on ID format" });
+    }
+
+    const addOn = await AddOnPlan.findById(id);
+    if (!addOn) {
+      return res.status(404).json({ message: "Add-on not found" });
+    }
+
+    await AddOnPlan.findByIdAndDelete(id);
+
+    res.status(200).json({
+      message: "Add-on deleted successfully",
+      deletedId: id
+    });
+  } catch (error) {
+    console.error('Error in deleteAddOnPlan:', error);
+    res.status(500).json({ message: "Error deleting add-on plan", error: error.message });
   }
 };

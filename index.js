@@ -15,6 +15,7 @@ const imageRoute = require('./routes/Image.js');
 const stripeRoute = require('./routes/Stripe.js');
 const SubscriptionPlan = require('./models/SubscriptionPlan.js');
 const Subscription = require('./models/Subscription.js');
+const AddOnPlan = require('./models/AddOnPlan.js');
 const nodemailer = require('nodemailer');
 const Contact = require('./models/Contact.js');
 const { handleWebhook } = require('./controllers/stripeController');
@@ -136,12 +137,26 @@ app.use(express.json());
 
 // CORS Configuration
 app.use(cors({
-  origin: ["http://localhost:5173", "https://ai-rfp-2-frontend.vercel.app", "https://ai-rfp-new.vercel.app", "https://rfp2grants.ai"],
+  origin: ["http://localhost:5173", "https://ai-rfp-2-frontend.vercel.app", "https://rfp2grants.ai"],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.get('/getSubscriptionPlansData', getSubscriptionPlansData);
+
+const getAddOnPlans = async (req, res) => {
+  try {
+    const addOns = await AddOnPlan.find({ isActive: true }).sort({ createdAt: -1 });
+    res.json(addOns);
+  } catch (err) {
+    res.status(500).json({
+      message: "Error fetching add-on plans data",
+      error: err.message
+    });
+  }
+};
+
+app.get('/getAddOnPlans', getAddOnPlans);
 app.post('/contact', sendEmail);
 
 // Register routes before starting server

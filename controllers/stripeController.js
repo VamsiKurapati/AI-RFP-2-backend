@@ -9,6 +9,7 @@ const CompanyProfile = require('../models/CompanyProfile');
 const { sendEmail } = require('../utils/mailSender');
 const emailTemplates = require('../utils/emailTemplates');
 const CustomPlan = require('../models/CustomPlan');
+const AddOnPlan = require('../models/AddOnPlan');
 
 const STRIPE_CONFIG = {
     BILLING_CYCLES: {
@@ -113,9 +114,9 @@ const processManualRefund = async (req, res) => {
                 }
             });
 
-            await User.findByIdAndUpdate(subscription.user_id, { subscription_status: 'Inactive' }, { session });
+            await User.findByIdAndUpdate(subscription.user_id, { subscription_status: 'inactive' });
 
-            await CompanyProfile.findOneAndUpdate({ userId: subscription.user_id }, { status: 'Inactive' }, { session });
+            await CompanyProfile.findOneAndUpdate({ userId: subscription.user_id }, { status: 'Inactive' });
         }
 
         res.status(200).json({
@@ -509,8 +510,6 @@ const activateSubscription = async (req, res) => {
 
         await sendEmail(req.user.email, subject, body);
 
-        await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Active' }, { session });
-
         res.status(200).json({
             success: true,
             message: 'Subscription activated successfully',
@@ -685,29 +684,33 @@ const handleSubscriptionWebhook = async (event) => {
     try {
         switch (type) {
             case "invoice.paid": {
-                const invoice = stripeObject;
-                const exists = await Payment.findOne({
-                    transaction_id: invoice.payment_intent || invoice.id,
-                    status: "Success",
-                });
-                if (exists) {
-                    return;
-                }
+                if (stripeObject?.mode === "payment") {
+                    await activateAddOnSubscription(stripeObject);
+                } else {
+                    const invoice = stripeObject;
+                    const exists = await Payment.findOne({
+                        transaction_id: invoice.payment_intent || invoice.id,
+                        status: "Success",
+                    });
+                    if (exists) {
+                        return;
+                    }
 
-                const subscriptionId =
-                    invoice.subscription ||
-                    invoice.lines?.data?.[0]?.subscription ||
-                    invoice.lines?.data?.[0]?.parent?.subscription_item_details?.subscription ||
-                    invoice.parent?.subscription_details?.subscription ||
-                    invoice.metadata?.subscriptionId;
-                if (!subscriptionId) {
-                    return;
-                }
+                    const subscriptionId =
+                        invoice.subscription ||
+                        invoice.lines?.data?.[0]?.subscription ||
+                        invoice.lines?.data?.[0]?.parent?.subscription_item_details?.subscription ||
+                        invoice.parent?.subscription_details?.subscription ||
+                        invoice.metadata?.subscriptionId;
+                    if (!subscriptionId) {
+                        return;
+                    }
 
-                const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId, {
-                    expand: ["items.data.price.product"],
-                });
-                await activateSubscriptionFromStripe(stripeSubscription, invoice);
+                    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId, {
+                        expand: ["items.data.price.product"],
+                    });
+                    await activateSubscriptionFromStripe(stripeSubscription, invoice);
+                }
                 break;
             }
 
@@ -1331,6 +1334,10 @@ const handleWebhook = async (req, res) => {
         switch (type) {
             case "checkout.session.completed":
                 if (object.mode === "subscription") {
+                    //Do nothing
+                } else if (object.mode === "payment") {
+                    //Do nothing
+                    await activateAddOnSubscription(object);
                 } else {
                     await handleEnterpriseCheckoutSessionCompleted(object);
                 }
@@ -1541,9 +1548,444 @@ const handleProductUpdate = async (product) => {
     }
 };
 
+const createAddOnCheckoutSession = async (req, res) => {
+    try {
+        const { addOnId, successUrl, cancelUrl } = req.body;
+        const userId = req.user._id;
+
+        if (req.user.role !== 'company') {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to create checkout session'
+            });
+        }
+
+        //if no active subscription, return error
+        const subscription = await Subscription.findOne({ user_id: userId, canceled_at: null, end_date: { $gt: new Date() } });
+        if (!subscription) {
+            return res.status(400).json({
+                success: false,
+                message: 'No active subscription found or subscription has expired'
+            });
+        }
+
+        if (!addOnId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required field: addOnId'
+            });
+        }
+
+        const addOn = await AddOnPlan.findById(addOnId);
+        if (!addOn) {
+            return res.status(404).json({
+                success: false,
+                message: 'Add-on not found'
+            });
+        }
+
+        if (!addOn.isActive) {
+            return res.status(400).json({
+                success: false,
+                message: 'Add-on is not available'
+            });
+        }
+
+        let user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Get or create Stripe customer
+        let stripeCustomerId = user.stripeCustomerId;
+        if (stripeCustomerId) {
+            try {
+                const customer = await stripe.customers.retrieve(stripeCustomerId);
+                if (!customer || customer.deleted) {
+                    stripeCustomerId = null;
+                }
+            } catch (stripeError) {
+                if (stripeError.code === 'resource_missing' || stripeError.statusCode === 404) {
+                    stripeCustomerId = null;
+                } else {
+                    stripeCustomerId = null;
+                }
+            }
+        }
+
+        if (!stripeCustomerId) {
+            try {
+                const customer = await stripe.customers.create({
+                    email: user.email,
+                    metadata: {
+                        userId: userId.toString()
+                    }
+                });
+                stripeCustomerId = customer.id;
+                user.stripeCustomerId = stripeCustomerId;
+                await user.save();
+            } catch (stripeError) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to create customer account'
+                });
+            }
+        }
+
+        // Create a Stripe product and price for the add-on (one-time payment)
+        let stripeProductId;
+        let stripePriceId;
+
+        try {
+            // Check if product already exists (you might want to store this in the AddOnPlan model)
+            // For now, we'll create a new product each time or use a naming convention
+            const productName = `Add-On: ${addOn.name}`;
+
+            // Try to find existing product by name
+            const existingProducts = await stripe.products.list({
+                limit: 100,
+            });
+            const existingProduct = existingProducts.data.find(p => p.name === productName);
+
+            if (existingProduct) {
+                stripeProductId = existingProduct.id;
+                // Get the default price
+                if (existingProduct.default_price) {
+                    stripePriceId = existingProduct.default_price;
+                } else {
+                    // Create price if it doesn't exist
+                    const price = await stripe.prices.create({
+                        product: stripeProductId,
+                        unit_amount: Math.round(addOn.price * 100),
+                        currency: 'usd',
+                    });
+                    stripePriceId = price.id;
+                }
+            } else {
+                // Create new product and price
+                const product = await stripe.products.create({
+                    name: productName,
+                    description: addOn.description || '',
+                });
+
+                const price = await stripe.prices.create({
+                    product: product.id,
+                    unit_amount: Math.round(addOn.price * 100),
+                    currency: 'usd',
+                });
+
+                stripeProductId = product.id;
+                stripePriceId = price.id;
+            }
+        } catch (stripeError) {
+            return res.status(500).json({
+                success: false,
+                message: `Failed to create Stripe product/price: ${stripeError.message}`
+            });
+        }
+
+        // Create checkout session (one-time payment, not subscription)
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const defaultSuccessUrl = successUrl || `${frontendUrl}/add-ons?success=true`;
+        const defaultCancelUrl = cancelUrl || `${frontendUrl}/add-ons?canceled=true`;
+
+        let checkoutSession;
+        try {
+            checkoutSession = await stripe.checkout.sessions.create({
+                customer: stripeCustomerId,
+                payment_method_types: ['card'],
+                line_items: [
+                    {
+                        price: stripePriceId,
+                        quantity: 1,
+                    },
+                ],
+                mode: 'payment', // One-time payment, not subscription
+                success_url: defaultSuccessUrl,
+                cancel_url: defaultCancelUrl,
+                metadata: {
+                    userId: userId.toString(),
+                    addOnId: addOnId.toString(),
+                    addOnName: addOn.name,
+                    type: 'addon'
+                }
+            });
+        } catch (stripeError) {
+            return res.status(500).json({
+                success: false,
+                message: `Failed to create checkout session: ${stripeError.message}`
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            sessionId: checkoutSession.id,
+            url: checkoutSession.url
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to create checkout session',
+            error: error
+        });
+    }
+};
+
+const handleAddOnRefund = async (stripeObject, errorMessage) => {
+    try {
+        const refund = await stripe.refunds.create({
+            payment_intent: stripeObject.payment_intent,
+            reason: 'requested_by_customer',
+        });
+        return refund;
+    }
+    catch (error) {
+        console.error("handleAddOnRefund error:", error.message);
+        return null;
+    }
+}
+
+const activateAddOnSubscription = async (stripeObject) => {
+    try {
+        const sessionId = stripeObject.id;
+        const userId = stripeObject.metadata.userId;
+
+        if (!sessionId || !userId) {
+            await handleAddOnRefund(stripeObject, "Missing session ID or user ID");
+            return;
+        }
+
+        // Retrieve checkout session WITHOUT expanding payment_intent to avoid object issues
+        // We'll extract the payment_intent ID from the original stripeObject if needed
+        const checkoutSession = await stripe.checkout.sessions.retrieve(sessionId);
+
+        // Verify session belongs to user
+        if (checkoutSession.metadata.userId !== userId.toString()) {
+            await handleAddOnRefund(stripeObject, "Checkout session does not belong to user");
+            return;
+        }
+
+        // Verify it's an add-on purchase
+        if (checkoutSession.metadata.type !== 'addon') {
+            await handleAddOnRefund(stripeObject, "Checkout session is not an add-on purchase");
+            return;
+        }
+
+        // Verify payment was successful
+        if (checkoutSession.payment_status !== 'paid') {
+            await handleAddOnRefund(stripeObject, "Checkout session payment was not successful");
+            return;
+        }
+
+        const addOnId = checkoutSession.metadata.addOnId;
+        const addOn = await AddOnPlan.findById(addOnId);
+
+        if (!addOn) {
+            await handleAddOnRefund(stripeObject, "Add-on not found");
+            return;
+        }
+
+        // Check if payment already processed
+        const existingPayment = await Payment.findOne({
+            transaction_id: checkoutSession.payment_intent || checkoutSession.id,
+            status: 'Success'
+        });
+
+        if (existingPayment) {
+            // await handleAddOnRefund(stripeObject, "Payment already processed");
+            return;
+        }
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            // Get user's current subscription
+            const subscription = await Subscription.findOne({ user_id: userId });
+
+            if (!subscription) {
+                await session.abortTransaction();
+                await handleAddOnRefund(stripeObject, "User has no subscription");
+                return;
+            }
+
+            // Update subscription based on add-on type and quantity
+            const updateData = {};
+
+            if (addOn.type === "RFP Proposals Generation") {
+                updateData.max_rfp_proposal_generations = subscription.max_rfp_proposal_generations + addOn.quantity;
+            } else if (addOn.type === "Grant Proposal Generations") {
+                updateData.max_grant_proposal_generations = subscription.max_grant_proposal_generations + addOn.quantity;
+            } else if (addOn.type === "RFP + Grant Proposal Generations") {
+                updateData.max_rfp_proposal_generations = subscription.max_rfp_proposal_generations + addOn.quantity;
+                updateData.max_grant_proposal_generations = subscription.max_grant_proposal_generations + addOn.quantity;
+            } else {
+                await handleAddOnRefund(stripeObject, "Add-on type not found");
+                return;
+            }
+
+            // Update subscription if there are changes
+            if (Object.keys(updateData).length > 0) {
+                await Subscription.findByIdAndUpdate(
+                    subscription._id,
+                    { $set: updateData },
+                    { session }
+                );
+            }
+
+            // Create payment record
+            // Extract payment intent ID - it should be a string when not expanded
+            let paymentIntentId = null;
+
+            // First, try to get it from the checkout session (should be a string)
+            if (checkoutSession.payment_intent) {
+                if (typeof checkoutSession.payment_intent === 'string') {
+                    paymentIntentId = checkoutSession.payment_intent;
+                } else if (checkoutSession.payment_intent && typeof checkoutSession.payment_intent === 'object' && checkoutSession.payment_intent.id) {
+                    // If somehow it's still an object, extract the ID
+                    paymentIntentId = checkoutSession.payment_intent.id;
+                }
+            }
+
+            // If not found, try the original stripeObject
+            if (!paymentIntentId && stripeObject && stripeObject.payment_intent) {
+                if (typeof stripeObject.payment_intent === 'string') {
+                    paymentIntentId = stripeObject.payment_intent;
+                } else if (stripeObject.payment_intent && typeof stripeObject.payment_intent === 'object' && stripeObject.payment_intent.id) {
+                    paymentIntentId = stripeObject.payment_intent.id;
+                }
+            }
+
+            // Final fallback to session ID
+            if (!paymentIntentId || typeof paymentIntentId !== 'string') {
+                paymentIntentId = checkoutSession.id;
+            }
+
+            // Ensure it's a string (should already be, but double-check)
+            paymentIntentId = String(paymentIntentId).trim();
+
+            const user = await User.findById(userId);
+            if (!user) {
+                await session.abortTransaction();
+                await handleAddOnRefund(stripeObject, "User not found for payment record");
+                return;
+            }
+
+            const companyProfile = await CompanyProfile.findOne({ userId: userId });
+            if (!companyProfile) {
+                await session.abortTransaction();
+                await handleAddOnRefund(stripeObject, "Company profile not found for payment record");
+                return;
+            }
+
+            // Double-check that paymentIntentId is a string before saving
+            const finalTransactionId = typeof paymentIntentId === 'string'
+                ? paymentIntentId
+                : (paymentIntentId?.id || checkoutSession.id);
+
+            await Payment.create([{
+                user_id: userId,
+                subscription_id: subscription._id,
+                price: addOn.price,
+                status: 'Success',
+                paid_at: new Date(),
+                transaction_id: finalTransactionId,
+                planName: addOn.name,
+                companyName: companyProfile.companyName,
+                payment_method: 'stripe',
+            }], { session });
+
+            await session.commitTransaction();
+
+            // Create notification
+            const notification = new Notification({
+                type: "Add-On",
+                title: "Add-on activated",
+                description: `Add-on "${addOn.name}" has been activated for ${user.email}`,
+                created_at: new Date(),
+            });
+            await notification.save();
+
+        } catch (error) {
+            await session.abortTransaction();
+
+            // Attempt refund
+            try {
+                let paymentIntentId = null;
+                if (checkoutSession.payment_intent) {
+                    if (typeof checkoutSession.payment_intent === 'string') {
+                        paymentIntentId = checkoutSession.payment_intent;
+                    } else if (checkoutSession.payment_intent && checkoutSession.payment_intent.id) {
+                        paymentIntentId = checkoutSession.payment_intent.id;
+                    }
+                }
+
+                // Ensure paymentIntentId is a string if it exists
+                if (paymentIntentId) {
+                    paymentIntentId = String(paymentIntentId);
+                }
+
+                if (paymentIntentId) {
+                    const refund = await stripe.refunds.create({
+                        payment_intent: paymentIntentId,
+                        reason: 'requested_by_customer',
+                        metadata: {
+                            reason: 'database_transaction_failed',
+                            userId: userId.toString(),
+                            addOnId: addOnId,
+                            error: error.message
+                        }
+                    });
+
+                    const user = await User.findById(userId);
+                    if (!user) {
+                        await handleAddOnRefund(stripeObject, "User not found for refund payment record");
+                        return;
+                    }
+
+                    const companyProfile = await CompanyProfile.findOne({ userId: userId });
+                    if (!companyProfile) {
+                        await handleAddOnRefund(stripeObject, "Company profile not found for refund payment record");
+                        return;
+                    }
+
+                    await Payment.create({
+                        user_id: userId,
+                        subscription_id: null,
+                        price: addOn.price,
+                        status: 'Pending Refund',
+                        paid_at: new Date(),
+                        transaction_id: paymentIntentId,
+                        refund_id: refund.id,
+                        companyName: companyProfile.companyName,
+                        payment_method: 'stripe',
+                        failure_reason: error.message
+                    });
+                    await handleAddOnRefund(stripeObject, "Add-on payment record created for refund");
+                }
+            } catch (refundError) {
+                await handleAddOnRefund(stripeObject, "Add-on refund failed: " + refundError.message);
+            }
+            throw error;
+        } finally {
+            session.endSession();
+        }
+
+    } catch (error) {
+        await handleAddOnRefund(stripeObject, "Add-on error in activateAddOnSubscription: " + error.message);
+        throw error;
+    }
+};
+
 module.exports = {
     createPaymentIntent,
     handleWebhook,
     activateSubscription,
     syncPricesFromStripe,
+    createAddOnCheckoutSession,
+    activateAddOnSubscription,
 };

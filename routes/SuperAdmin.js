@@ -28,7 +28,10 @@ const { getCompanyStatsAndData,
      deactivateSubscription,
      assignNewSubscriptionToUser,
      bulkDeactivateSubscriptions,
-     updateUserSubscription
+     updateUserSubscription,
+     createAddOnPlan,
+     updateAddOnPlan,
+     deleteAddOnPlan
 } = require('../controllers/superAdminController');
 
 const { syncPricesFromStripe } = require('../controllers/stripeController');
@@ -83,6 +86,11 @@ router.post('/deactivateSubscription', verifyUser(["SuperAdmin"]), deactivateSub
 router.post('/assignSubscription', verifyUser(["SuperAdmin"]), assignNewSubscriptionToUser);
 router.post('/updateUserSubscription', verifyUser(["SuperAdmin"]), updateUserSubscription);
 router.post('/bulkDeactivateSubscriptions', verifyUser(["SuperAdmin"]), bulkDeactivateSubscriptions);
+
+// Add-on plans routes
+router.post('/createAddOnPlan', verifyUser(["SuperAdmin"]), createAddOnPlan);
+router.put('/updateAddOnPlan/:id', verifyUser(["SuperAdmin"]), updateAddOnPlan);
+router.delete('/deleteAddOnPlan/:id', verifyUser(["SuperAdmin"]), deleteAddOnPlan);
 
 
 module.exports = router;
