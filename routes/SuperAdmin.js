@@ -31,7 +31,8 @@ const { getCompanyStatsAndData,
      updateUserSubscription,
      createAddOnPlan,
      updateAddOnPlan,
-     deleteAddOnPlan
+     deleteAddOnPlan,
+     sendCustomEmail
 } = require('../controllers/superAdminController');
 
 const { syncPricesFromStripe } = require('../controllers/stripeController');
@@ -92,5 +93,7 @@ router.post('/createAddOnPlan', verifyUser(["SuperAdmin"]), createAddOnPlan);
 router.put('/updateAddOnPlan/:id', verifyUser(["SuperAdmin"]), updateAddOnPlan);
 router.delete('/deleteAddOnPlan/:id', verifyUser(["SuperAdmin"]), deleteAddOnPlan);
 
+//send custom email
+router.post('/sendCustomEmail', verifyUser(["SuperAdmin"]), sendCustomEmail);
 
 module.exports = router;

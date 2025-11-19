@@ -1414,3 +1414,27 @@ exports.deleteAddOnPlan = async (req, res) => {
     res.status(500).json({ message: "Error deleting add-on plan", error: error.message });
   }
 };
+
+exports.sendCustomEmail = async (req, res) => {
+  try {
+    const { subject, body, sendTo } = req.body;
+    let emails = [];
+    if (sendTo === "All") {
+      emails = await User.find({ role: "company" }).select("email");
+    } else if (sendTo === "Active Users") {
+      emails = await User.find({ role: "company", subscription_status: "active" }).select("email");
+    } else if (sendTo === "Inactive Users") {
+      emails = await User.find({ role: "company", subscription_status: "inactive" }).select("email");
+    } else {
+      const { customEmails } = req.body;
+      emails = customEmails;
+    }
+    await Promise.all(emails.map(async (email) => {
+      await sendEmail(email, subject, body);
+    }));
+    res.status(200).json({ message: emails.length > 0 ? emails.length === 1 ? "Email sent successfully" : "Emails sent successfully" : "No members found to send email" });
+  } catch (error) {
+    console.error('Error in sendCustomEmail:', error);
+    res.status(500).json({ message: "Error sending emails", error: error.message });
+  }
+};
