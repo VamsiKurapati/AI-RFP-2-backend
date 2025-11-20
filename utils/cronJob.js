@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { deleteExpiredProposals, fetchGrants, priorityCronJob, fetchRFPs, deleteExpiredGrantProposals, fetchRefundPayments, updateSubscriptionStatus, resetFetchedMatchingRFPs } = require('../controllers/cronJobControllers');
+const { deleteExpiredProposals, fetchGrants, priorityCronJob, fetchRFPs, deleteExpiredGrantProposals, fetchRefundPayments, updateSubscriptionStatus, resetFetchedMatchingRFPs, sendProposalDueDateReminderEmails, sendGrantProposalDueDateReminderEmails } = require('../controllers/cronJobControllers');
 
 // Run the cron job only in instance 0
 if (process.env.NODE_APP_INSTANCE === '0') {
@@ -70,6 +70,24 @@ if (process.env.NODE_APP_INSTANCE === '0') {
       await updateSubscriptionStatus();
     } catch (error) {
       console.error('Error updating subscription status:', error);
+    }
+  });
+
+  // Cron job to send proposal due date reminder emails every day at 08:00 AM server time
+  cron.schedule('0 8 * * *', async () => {
+    try {
+      await sendProposalDueDateReminderEmails();
+    } catch (error) {
+      console.error('Error sending proposal due date reminder emails:', error);
+    }
+  });
+
+  // Cron job to send grant proposal due date reminder emails every day at 09:00 AM server time
+  cron.schedule('0 9 * * *', async () => {
+    try {
+      await sendGrantProposalDueDateReminderEmails();
+    } catch (error) {
+      console.error('Error sending grant proposal due date reminder emails:', error);
     }
   });
 }

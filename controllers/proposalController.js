@@ -10,7 +10,6 @@ const DraftGrant = require('../models/DraftGrant');
 const Subscription = require('../models/Subscription');
 const CompanyProfile = require('../models/CompanyProfile');
 
-const { getStructuredJson } = require('../utils/get_structured_json');
 const { decompress } = require('../utils/decompress');
 const { convertPdfToJsonFile } = require('../utils/pdfToJsonConverter');
 const { GridFsStorage } = require("multer-gridfs-storage");
@@ -56,51 +55,6 @@ async function getFileBufferFromGridFS(fileId) {
     });
   });
 }
-
-exports.basicComplianceCheck = async (req, res) => {
-  try {
-    const { jsonData, proposalId, isCompressed } = req.body;
-
-    // Input validation
-    if (!jsonData || !proposalId) {
-      return res.status(400).json({ message: "jsonData and proposalId are required" });
-    }
-
-    // Validate ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(proposalId)) {
-      return res.status(400).json({ message: "Invalid proposal ID format" });
-    }
-
-    const new_proposal = await Proposal.findById(proposalId);
-    if (!new_proposal) {
-      return res.status(404).json({ message: "Proposal not found" });
-    }
-
-    const decompressedProposal = isCompressed ? decompress(jsonData) : jsonData;
-
-    const structuredJson = getStructuredJson(decompressedProposal, new_proposal.initialProposal);
-
-    const resProposal = await axios.post(`${process.env.PIPELINE_URL}/basic-compliance`, structuredJson, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    });
-
-    const data = resProposal.data.report;
-
-    const firstKey = Object.keys(data)[0];
-    const firstValue = data[firstKey];
-
-    const compliance_data = firstValue["compliance_flags"];
-
-    res.status(200).json(compliance_data);
-  } catch (error) {
-    console.error('Error in basicComplianceCheck:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ message: error.message });
-  }
-};
 
 exports.basicComplianceCheckPdf = [
   singleFileUpload,
@@ -239,88 +193,6 @@ exports.basicComplianceCheckPdf = [
     }
   }
 ];
-
-exports.advancedComplianceCheck = async (req, res) => {
-  try {
-    const { jsonData, proposalId, isCompressed } = req.body;
-
-    // Input validation
-    if (!jsonData || !proposalId) {
-      return res.status(400).json({ message: "jsonData and proposalId are required" });
-    }
-
-    // Validate ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(proposalId)) {
-      return res.status(400).json({ message: "Invalid proposal ID format" });
-    }
-
-    const decompressedProposal = isCompressed ? decompress(jsonData) : jsonData;
-
-    const new_proposal = await Proposal.findById(proposalId);
-    if (!new_proposal) {
-      return res.status(404).json({ message: "Proposal not found" });
-    }
-
-    const structuredJson = getStructuredJson(decompressedProposal, new_proposal.initialProposal);
-
-    const rfp = await MatchedRFP.findById(new_proposal.rfpId) || await RFP.findById(new_proposal.rfpId);
-    if (!rfp) {
-      return res.status(404).json({ message: "RFP not found" });
-    }
-
-    const initialProposal_1 = {
-      "rfp": {
-        "RFP Title": rfp.title || "Not found",
-        "RFP Description": rfp.description || "Not found",
-        "Match Score": rfp.match || 0,
-        "Budget": rfp.budget || "Not found",
-        "Deadline": rfp.deadline || "Not found",
-        "Issuing Organization": rfp.organization || "Not found",
-        "Industry": rfp.organizationType || "Not found",
-        "URL": rfp.link || "Not found",
-        "Contact Information": rfp.contact || "Not found",
-        "Document Link": rfp.docsLink || "Not found",
-        "Office": rfp.office || "Not found",
-        "Issuing Office": rfp.issuingOffice || "Not found",
-        "Country": rfp.country || "Not found",
-        "State": rfp.state || "Not found",
-      },
-      "proposal": {
-        ...structuredJson
-      }
-    };
-
-
-    const resBasicCompliance = await axios.post(`${process.env.PIPELINE_URL}/basic-compliance`, structuredJson, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    });
-
-    const dataBasicCompliance = resBasicCompliance.data.report;
-
-    const firstKey = Object.keys(dataBasicCompliance)[0];
-    const firstValue = dataBasicCompliance[firstKey];
-
-    const compliance_dataBasicCompliance = firstValue["compliance_flags"];
-
-    const resProposal = await axios.post(`${process.env.PIPELINE_URL}/advance-compliance`, initialProposal_1, {
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
-
-    const dataAdvancedCompliance = resProposal.data.report;
-
-    res.status(200).json({ compliance_dataBasicCompliance, dataAdvancedCompliance });
-
-  } catch (error) {
-    const statusCode = error.response && error.response.status ? error.response.status : 500;
-    const responseData = error.response && error.response.data ? error.response.data : null;
-    res.status(statusCode).json({ message: 'Advanced compliance check failed', error: responseData || error.message });
-  }
-};
 
 exports.advancedComplianceCheckPdf = [
   singleFileUpload,

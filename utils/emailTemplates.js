@@ -1213,3 +1213,361 @@ exports.getAddOnActivatedEmail = async (fullName, addOnName, addOnPrice) => {
         body: getBaseTemplate(content, 'Add-on Activated!')
     };
 };
+
+// Daily New RFP Alert Email Template
+exports.getNewRFPAlertEmail = async (user) => {
+    const emailContent = await getEmailContentFromDB('newRFPAlert');
+
+    if (emailContent) {
+        const replacements = {
+            fullName: user.fullName || 'User',
+            email: user.email,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const content = `
+        <div style="${styles.greeting}">New RFPs Available! 🎯</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${user.fullName || 'User'}</strong>,</p>
+
+        <div style="${styles.successBox}">
+            <p style="margin:0; color:#15803D; font-weight:600;">✨ We've just fetched new RFPs from our database! There may be opportunities that match your company profile.</p>
+        </div>
+
+        <p style="${styles.message}">
+            Our system has updated the RFP database with the latest opportunities. Don't miss out on potential matches for your business.
+        </p>
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">View New RFPs →</a>
+        </div>
+
+        <div style="${styles.divider}"></div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 12px 0; color:#1E40AF; font-weight:600;">💡 Pro Tip:</p>
+            <p style="margin:0; color:#475569;">Check your dashboard regularly to discover new RFPs that match your company's capabilities and industry focus.</p>
+        </div>
+
+        <p style="${styles.message}">Happy proposal hunting!</p>
+    `;
+
+    return {
+        subject: 'New RFPs Available - Check Your Dashboard',
+        body: getBaseTemplate(content, 'New RFPs Available - Check Your Dashboard')
+    };
+};
+
+// Plan Due Date Reminder Email Template
+exports.getPlanDueDateReminderEmail = async (fullName, planName, endDate, daysRemaining) => {
+    const emailContent = await getEmailContentFromDB('planDueDateReminder');
+
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            planName: planName,
+            endDate: new Date(endDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+            daysRemaining: daysRemaining,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const isUrgent = daysRemaining <= 3;
+    const urgencyStyle = isUrgent ? styles.warningBox : styles.highlightBox;
+    const urgencyMessage = isUrgent
+        ? `⚠️ <strong style="color:#991b1b;">Urgent:</strong> Your subscription expires in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}!`
+        : `Your <strong style="color:#0f172a;">${planName}</strong> subscription will expire in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}.`;
+
+    const content = `
+        <div style="${styles.greeting}">Subscription Renewal Reminder ${isUrgent ? '⚠️' : '📅'}</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+
+        <div style="${urgencyStyle}">
+            <p style="margin:0; ${isUrgent ? 'color:#991b1b;' : 'color:#1E40AF;'} font-weight:600;">${urgencyMessage}</p>
+        </div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 16px 0; color:#1E40AF; font-weight:600; font-size:18px;">📋 Subscription Details</p>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Current Plan</div>
+                <div style="${styles.infoValue}">${planName}</div>
+            </div>
+
+            <div style="padding:10px 0;">
+                <div style="${styles.infoLabel}">Expiration Date</div>
+                <div style="${styles.infoValue}">${new Date(endDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+            </div>
+        </div>
+
+        <p style="${styles.message}">
+            ${isUrgent
+            ? 'To avoid service interruption, please renew your subscription as soon as possible.'
+            : 'Renew your subscription now to continue enjoying all premium features without interruption.'}
+        </p>
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/pricing" style="${styles.btnPrimary}">Renew Subscription →</a>
+        </div>
+
+        ${isUrgent ? `
+        <div style="${styles.warningBox}">
+            <p style="margin:0; color:#991b1b;">⚠️ <strong>Important:</strong> If your subscription expires, you'll lose access to premium features. Renew today to maintain uninterrupted service.</p>
+        </div>
+        ` : ''}
+
+        <p style="${styles.message}">Thank you for being a valued RFP2GRANTS customer!</p>
+    `;
+
+    return {
+        subject: `${isUrgent ? 'URGENT: ' : ''}Your ${planName} subscription expires in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}`,
+        body: getBaseTemplate(content, `${isUrgent ? 'URGENT: ' : ''}Your ${planName} subscription expires in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}`)
+    };
+};
+
+// Proposal Status Changed Email Template
+exports.getProposalStatusChangedEmail = async (fullName, proposalTitle, oldStatus, newStatus, proposalType = 'RFP') => {
+    const emailContent = await getEmailContentFromDB('proposalStatusChanged');
+
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            proposalTitle: proposalTitle,
+            oldStatus: oldStatus,
+            newStatus: newStatus,
+            proposalType: proposalType,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const isPositiveStatus = ['Won', 'Submitted'].includes(newStatus);
+    const statusBoxStyle = isPositiveStatus ? styles.successBox : styles.highlightBox;
+    const statusColor = isPositiveStatus ? '#15803D' : '#1E40AF';
+
+    const content = `
+        <div style="${styles.greeting}">Proposal Status Updated 📊</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+
+        <p style="${styles.message}">The status of your ${proposalType} proposal has been updated.</p>
+
+        <div style="${statusBoxStyle}">
+            <p style="margin:0 0 12px 0; ${isPositiveStatus ? 'color:#15803D;' : 'color:#1E40AF;'} font-weight:600; font-size:18px;">📝 Proposal Details</p>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Proposal Title</div>
+                <div style="${styles.infoValue}">${proposalTitle}</div>
+            </div>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Previous Status</div>
+                <div style="${styles.infoValue}">${oldStatus}</div>
+            </div>
+
+            <div style="padding:10px 0;">
+                <div style="${styles.infoLabel}">New Status</div>
+                <div style="${styles.infoValue}"><span style="color:${statusColor}; font-weight:700;">${newStatus}</span></div>
+            </div>
+        </div>
+
+        ${newStatus === 'Won' ? `
+        <div style="${styles.successBox}">
+            <p style="margin:0; color:#15803D; font-weight:600;">🎉 Congratulations! Your proposal was accepted! This is a great achievement.</p>
+        </div>
+        ` : ''}
+
+        ${newStatus === 'Rejected' ? `
+        <div style="${styles.highlightBox}">
+            <p style="margin:0; color:#1E40AF;">💡 Don't be discouraged. Use this as a learning opportunity to improve your future proposals.</p>
+        </div>
+        ` : ''}
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">View Proposal →</a>
+        </div>
+
+        <p style="${styles.message}">You can view all your proposals and their statuses in your dashboard.</p>
+    `;
+
+    return {
+        subject: `Proposal Status Updated: ${proposalTitle} - ${newStatus}`,
+        body: getBaseTemplate(content, `Proposal Status Updated: ${proposalTitle} - ${newStatus}`)
+    };
+};
+
+// Proposal Deleted Email Template
+exports.getProposalDeletedEmail = async (fullName, proposalTitle, deletedBy, proposalType = 'RFP') => {
+    const emailContent = await getEmailContentFromDB('proposalDeleted');
+
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            proposalTitle: proposalTitle,
+            deletedBy: deletedBy || 'System',
+            proposalType: proposalType,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const content = `
+        <div style="${styles.greeting}">Proposal Deleted 🗑️</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+
+        <div style="${styles.warningBox}">
+            <p style="margin:0; color:#991b1b; font-weight:600;">⚠️ A ${proposalType} proposal has been deleted from your account.</p>
+        </div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 16px 0; color:#1E40AF; font-weight:600; font-size:18px;">📋 Deleted Proposal Details</p>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Proposal Title</div>
+                <div style="${styles.infoValue}">${proposalTitle}</div>
+            </div>
+
+            <div style="padding:10px 0;">
+                <div style="${styles.infoLabel}">Deleted By</div>
+                <div style="${styles.infoValue}">${deletedBy || 'System'}</div>
+            </div>
+        </div>
+
+        <p style="${styles.message}">
+            <strong>Note:</strong> Deleted proposals are moved to the trash and can be restored within 30 days. After that period, they will be permanently deleted.
+        </p>
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">View Dashboard →</a>
+        </div>
+
+        <div style="${styles.divider}"></div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0; color:#1E40AF; font-weight:600;">💡 Need to restore this proposal?</p>
+            <p style="margin:8px 0 0 0; color:#475569;">You can restore deleted proposals from the trash section in your dashboard within 30 days of deletion.</p>
+        </div>
+    `;
+
+    return {
+        subject: `Proposal Deleted: ${proposalTitle}`,
+        body: getBaseTemplate(content, `Proposal Deleted: ${proposalTitle}`)
+    };
+};
+
+// Proposal Due Date Reminder Email Template
+exports.getProposalDueDateReminderEmail = async (fullName, proposalTitle, deadline, daysRemaining, proposalType = 'RFP') => {
+    const emailContent = await getEmailContentFromDB('proposalDueDateReminder');
+
+    if (emailContent) {
+        const replacements = {
+            fullName: fullName,
+            proposalTitle: proposalTitle,
+            deadline: new Date(deadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+            deadlineTime: new Date(deadline).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            daysRemaining: daysRemaining,
+            proposalType: proposalType,
+            frontendUrl: process.env.FRONTEND_URL || '#'
+        };
+        const body = replacePlaceholders(emailContent.body, replacements);
+        const subject = replacePlaceholders(emailContent.subject, replacements);
+        return { subject, body };
+    }
+
+    // Fallback to original template
+    const isUrgent = daysRemaining <= 1;
+    const isVeryUrgent = daysRemaining === 0;
+    const urgencyStyle = isVeryUrgent ? styles.warningBox : isUrgent ? styles.warningBox : styles.highlightBox;
+    const urgencyMessage = isVeryUrgent
+        ? `🚨 <strong style="color:#991b1b;">DUE TODAY!</strong> Your proposal deadline is today!`
+        : isUrgent
+            ? `⚠️ <strong style="color:#991b1b;">Urgent:</strong> Your proposal deadline is in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}!`
+            : `Your ${proposalType} proposal deadline is approaching in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}.`;
+
+    const content = `
+        <div style="${styles.greeting}">Proposal Deadline Reminder ${isVeryUrgent ? '🚨' : isUrgent ? '⚠️' : '📅'}</div>
+
+        <p style="${styles.message}">Hi <strong style="color:#0f172a;">${fullName}</strong>,</p>
+
+        <div style="${urgencyStyle}">
+            <p style="margin:0; ${isVeryUrgent || isUrgent ? 'color:#991b1b;' : 'color:#1E40AF;'} font-weight:600;">${urgencyMessage}</p>
+        </div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 16px 0; color:#1E40AF; font-weight:600; font-size:18px;">📋 Proposal Details</p>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Proposal Title</div>
+                <div style="${styles.infoValue}">${proposalTitle}</div>
+            </div>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Deadline Date</div>
+                <div style="${styles.infoValue}">${new Date(deadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+            </div>
+
+            <div style="${styles.infoItem}">
+                <div style="${styles.infoLabel}">Deadline Time</div>
+                <div style="${styles.infoValue}">${new Date(deadline).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}</div>
+            </div>
+
+            <div style="padding:10px 0;">
+                <div style="${styles.infoLabel}">Time Remaining</div>
+                <div style="${styles.infoValue}"><span style="color:${isVeryUrgent || isUrgent ? '#DC2626' : '#1E4EDD'}; font-weight:700;">${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}</span></div>
+            </div>
+        </div>
+
+        ${isVeryUrgent ? `
+        <div style="${styles.warningBox}">
+            <p style="margin:0; color:#991b1b; font-weight:600;">🚨 <strong>Action Required:</strong> Your proposal is due today! Please submit it as soon as possible to avoid missing the deadline.</p>
+        </div>
+        ` : isUrgent ? `
+        <div style="${styles.warningBox}">
+            <p style="margin:0; color:#991b1b;">⚠️ <strong>Time is running out!</strong> Make sure to complete and submit your proposal before the deadline.</p>
+        </div>
+        ` : `
+        <p style="${styles.message}">
+            This is a friendly reminder to ensure you have enough time to review, finalize, and submit your proposal before the deadline.
+        </p>
+        `}
+
+        <div style="text-align:center; margin:30px 0;">
+            <a href="${process.env.FRONTEND_URL || '#'}\/dashboard" style="${styles.btnPrimary}">View Proposal →</a>
+        </div>
+
+        <div style="${styles.divider}"></div>
+
+        <div style="${styles.highlightBox}">
+            <p style="margin:0 0 8px 0; color:#1E40AF; font-weight:600;">💡 Tips for Success:</p>
+            <ul style="margin:8px 0 0 20px; color:#475569;">
+                <li style="margin:4px 0;">Review all requirements one final time</li>
+                <li style="margin:4px 0;">Double-check your submission format</li>
+                <li style="margin:4px 0;">Submit well before the deadline to avoid last-minute issues</li>
+            </ul>
+        </div>
+
+        <p style="${styles.message}">Good luck with your proposal submission!</p>
+    `;
+
+    return {
+        subject: `${isVeryUrgent ? '🚨 DUE TODAY: ' : isUrgent ? '⚠️ URGENT: ' : ''}${proposalTitle} - Deadline in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}`,
+        body: getBaseTemplate(content, `${isVeryUrgent ? '🚨 DUE TODAY: ' : isUrgent ? '⚠️ URGENT: ' : ''}${proposalTitle} - Deadline in ${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'}`)
+    };
+};

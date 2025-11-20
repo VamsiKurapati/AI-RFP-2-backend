@@ -16,6 +16,8 @@ const Payment = require('../models/Payments');
 const Subscription = require('../models/Subscription');
 const User = require('../models/User');
 const CompanyProfile = require('../models/CompanyProfile');
+const emailTemplates = require('../utils/emailTemplates');
+const { sendEmail } = require('../utils/mailSender');
 
 //Trigger Grant Cron Job to fetch Grants from the Grant API and save them to the database
 exports.fetchGrants = async () => {
@@ -318,6 +320,7 @@ exports.fetchRFPs = async () => {
             }
         }));
         console.log('RFPs fetched successfully and saved to the database');
+        await sendNewRFPEmailsToUsers();
         return { message: "RFPs fetched successfully" };
     } catch (err) {
         console.error('Error in fetchRFPs service:', err);
@@ -396,5 +399,85 @@ exports.resetFetchedMatchingRFPs = async () => {
     } catch (error) {
         console.error('Error in resetFetchedMatchingRFPs service:', error);
         return { message: error.message || "Error resetting fetched matching RFPs" };
+    }
+};
+
+exports.sendNewRFPEmailsToUsers = async () => {
+    try {
+        const users = await User.find({ role: 'company' }).select('email fullName');
+        console.log(`Found ${users.length} users to send new RFP emails to`);
+        await Promise.all(users.map(async (user) => {
+            const { subject, body } = await emailTemplates.getNewRFPAlertEmail(user);
+            await sendEmail(user.email, subject, body);
+        }));
+        console.log('New RFP emails sent successfully');
+        return { message: "New RFP emails sent successfully" };
+    } catch (error) {
+        console.error('Error in sendNewRFPEmailsToUsers service:', error);
+        return { message: error.message || "Error sending new RFP emails to users" };
+    }
+};
+
+exports.sendProposalDueDateReminderEmails = async () => {
+    try {
+        //Get all proposals where deadline is 3 days from now and status is 'Pending'
+        const today = new Date();
+        const startDate = new Date(today.setHours(0, 0, 0, 0));
+        const endDate = new Date(today.setHours(23, 59, 59, 999) + 3 * 24 * 60 * 60 * 1000);
+        const proposals = await Proposal.find({ deadline: { $gte: startDate, $lt: endDate }, status: { $in: ['Pending', 'In Progress'] } });
+        console.log(`Found ${proposals.length} proposals to send due date reminder emails to`);
+        await Promise.all(proposals.map(async (proposal) => {
+            const companyProfile = await CompanyProfile.findOne({ email: proposal.companyMail });
+            if (!companyProfile) {
+                return;
+            }
+            const user = await User.findById(companyProfile.userId);
+            if (!user) {
+                return;
+            }
+            const noOfDaysRemaining = Math.ceil((new Date(proposal.deadline) - today) / (1000 * 60 * 60 * 24));
+            const { subject, body } = await emailTemplates.getProposalDueDateReminderEmail(user.fullName, proposal.title, proposal.deadline, noOfDaysRemaining, 'RFP');
+            try {
+                await sendEmail(proposal.companyMail, subject, body);
+            } catch (error) {
+                console.error('Error sending proposal due date reminder email:', error);
+            }
+        }));
+    } catch (error) {
+        console.error('Error in sendProposalDueDateReminderEmails service:', error);
+        return { message: error.message || "Error sending proposal due date reminder emails to users" };
+    }
+};
+
+exports.sendGrantProposalDueDateReminderEmails = async () => {
+    try {
+        //Get all grant proposals where deadline is 3 days from now and status is 'Pending'
+        const today = new Date();
+        const startDate = new Date(today.setHours(0, 0, 0, 0));
+        const endDate = new Date(today.setHours(23, 59, 59, 999) + 3 * 24 * 60 * 60 * 1000);
+        const grantProposals = await GrantProposal.find({ deadline: { $gte: startDate, $lt: endDate }, status: { $in: ['Pending', 'In Progress'] } });
+        console.log(`Found ${grantProposals.length} grant proposals to send due date reminder emails to`);
+        await Promise.all(grantProposals.map(async (grantProposal) => {
+            const companyProfile = await CompanyProfile.findOne({ email: grantProposal.companyMail });
+            if (!companyProfile) {
+                return;
+            }
+            const user = await User.findById(companyProfile.userId);
+            if (!user) {
+                return;
+            }
+            const noOfDaysRemaining = Math.ceil((new Date(grantProposal.deadline) - today) / (1000 * 60 * 60 * 24));
+            const { subject, body } = await emailTemplates.getProposalDueDateReminderEmail(user.fullName, grantProposal.title, grantProposal.deadline, noOfDaysRemaining, 'Grant');
+            try {
+                await sendEmail(grantProposal.companyMail, subject, body);
+            } catch (error) {
+                console.error('Error sending grant proposal due date reminder email:', error);
+            }
+        }));
+        console.log('Grant proposal due date reminder emails sent successfully');
+        return { message: "Grant proposal due date reminder emails sent successfully" };
+    } catch (error) {
+        console.error('Error in sendGrantProposalDueDateReminderEmails service:', error);
+        return { message: error.message || "Error sending grant proposal due date reminder emails to users" };
     }
 };
