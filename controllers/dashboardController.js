@@ -13,10 +13,10 @@ const RFP = require("../models/RFP");
 const MatchedRFP = require("../models/MatchedRFP");
 const Grant = require("../models/Grant");
 
-const { sendEmail } = require("../utils/mailSender");
+const { queueEmail } = require("../utils/mailSender");
 const emailTemplates = require("../utils/emailTemplates");
 
-const sendProposalStatusUpdateEmail = async (proposal) => {
+const sendProposalStatusUpdateEmail = async (proposal, oldStatus, newStatus) => {
     const companyProfile = await CompanyProfile.findOne({ email: proposal.companyMail });
     if (!companyProfile) {
         return;
@@ -25,15 +25,15 @@ const sendProposalStatusUpdateEmail = async (proposal) => {
     if (!user) {
         return;
     }
-    const { subject, body } = await emailTemplates.getProposalStatusChangedEmail(user.fullName, proposal.title, proposal.status, proposal.status, 'RFP');
+    const { subject, body } = await emailTemplates.getProposalStatusChangedEmail(user.fullName, proposal.title, oldStatus, newStatus, 'RFP');
     try {
-        await sendEmail(proposal.companyMail, subject, body);
+        queueEmail(proposal.companyMail, subject, body, 'proposalStatusChanged');
     } catch (error) {
         console.error('Error sending proposal status update email:', error);
     }
 };
 
-const sendGrantProposalStatusUpdateEmail = async (grantProposal) => {
+const sendGrantProposalStatusUpdateEmail = async (grantProposal, oldStatus, newStatus) => {
     const companyProfile = await CompanyProfile.findOne({ email: grantProposal.companyMail });
     if (!companyProfile) {
         return;
@@ -42,9 +42,9 @@ const sendGrantProposalStatusUpdateEmail = async (grantProposal) => {
     if (!user) {
         return;
     }
-    const { subject, body } = await emailTemplates.getProposalStatusChangedEmail(user.fullName, grantProposal.title, grantProposal.status, grantProposal.status, 'Grant');
+    const { subject, body } = await emailTemplates.getProposalStatusChangedEmail(user.fullName, grantProposal.title, oldStatus, newStatus, 'Grant');
     try {
-        await sendEmail(grantProposal.companyMail, subject, body);
+        queueEmail(grantProposal.companyMail, subject, body, 'proposalStatusChanged');
     } catch (error) {
         console.error('Error sending grant proposal status update email:', error);
     }
@@ -59,9 +59,14 @@ const sendProposalDeletedEmail = async (proposal) => {
     if (!user) {
         return;
     }
-    const { subject, body } = await emailTemplates.getProposalDeletedEmail(user.fullName, proposal.title, proposal.status, proposal.status, 'RFP');
+
+    const deletedBy = await User.findById(proposal.deletedBy).select('fullName email');
+    if (!deletedBy) {
+        return;
+    }
+    const { subject, body } = await emailTemplates.getProposalDeletedEmail(user.fullName, proposal.title, deletedBy.fullName + " (" + deletedBy.email + ")", 'RFP');
     try {
-        await sendEmail(proposal.companyMail, subject, body);
+        queueEmail(proposal.companyMail, subject, body, 'proposalDeleted');
     } catch (error) {
         console.error('Error sending proposal deleted email:', error);
     }
@@ -76,9 +81,13 @@ const sendGrantProposalDeletedEmail = async (grantProposal) => {
     if (!user) {
         return;
     }
-    const { subject, body } = await emailTemplates.getProposalDeletedEmail(user.fullName, grantProposal.title, grantProposal.status, grantProposal.status, 'Grant');
+    const deletedBy = await User.findById(grantProposal.deletedBy).select('fullName email');
+    if (!deletedBy) {
+        return;
+    }
+    const { subject, body } = await emailTemplates.getProposalDeletedEmail(user.fullName, grantProposal.title, deletedBy.fullName + " (" + deletedBy.email + ")", 'Grant');
     try {
-        await sendEmail(grantProposal.companyMail, subject, body);
+        queueEmail(grantProposal.companyMail, subject, body, 'proposalDeleted');
     } catch (error) {
         console.error('Error sending grant proposal deleted email:', error);
     }
@@ -526,7 +535,7 @@ exports.setCurrentEditor = async (req, res) => {
 
         res.status(200).json({ message: "Editor set successfully" });
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Proposal editor set error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -574,7 +583,7 @@ exports.setCurrentEditorGrant = async (req, res) => {
 
         res.status(200).json({ message: "Editor set successfully" });
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Grant proposal editor set error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -588,21 +597,21 @@ exports.restoreProposal = async (req, res) => {
         const proposal = await Proposal.findByIdAndUpdate(proposalId, { isDeleted: false, deletedBy: null, deletedAt: null, restoreBy: null, restoredBy: req.user._id, restoredAt: new Date() }, { new: true });
         res.status(200).json(proposal);
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Proposal restoration error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
 
 exports.restoreGrantProposal = async (req, res) => {
     try {
-        const { grantProposalId } = req.body;
-        if (!mongoose.Types.ObjectId.isValid(grantProposalId)) {
+        const { proposalId } = req.body;
+        if (!mongoose.Types.ObjectId.isValid(proposalId)) {
             return res.status(400).json({ message: "Invalid ID format" });
         }
-        const proposal = await GrantProposal.findByIdAndUpdate(grantProposalId, { isDeleted: false, deletedBy: null, deletedAt: null, restoreBy: null, restoredBy: req.user._id, restoredAt: new Date() }, { new: true });
+        const proposal = await GrantProposal.findByIdAndUpdate(proposalId, { isDeleted: false, deletedBy: null, deletedAt: null, restoreBy: null, restoredBy: req.user._id, restoredAt: new Date() }, { new: true });
         res.status(200).json(proposal);
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Grant proposal restoration error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -618,18 +627,25 @@ exports.deleteProposals = async (req, res) => {
                 return res.status(400).json({ message: "Invalid ID format" });
             }
         }
-        const proposals = await Proposal.updateMany({ _id: { $in: proposalIds } }, {
-            isDeleted: true,
-            deletedBy: req.user._id,
-            deletedAt: new Date(),
-            restoreBy: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000)
-        }); // 15 days
-        await Promise.all(proposals.map(async (proposal) => {
-            await sendProposalDeletedEmail(proposal);
-        }));
-        res.status(200).json(proposals);
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try {
+            await Proposal.updateMany({ _id: { $in: proposalIds } }, { isDeleted: true, deletedBy: req.user._id, deletedAt: new Date(), restoreBy: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) }, { session });
+
+            const proposals = await Proposal.find({ _id: { $in: proposalIds } }).session(session);
+
+            await session.commitTransaction();
+            session.endSession();
+
+            await Promise.all(proposals.map((p) => sendProposalDeletedEmail(p)));
+        } catch (err) {
+            await session.abortTransaction();
+            session.endSession();
+            throw err;
+        }
+        res.status(200).json({ message: "Proposals deleted successfully" });
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Proposal deletion error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -645,18 +661,38 @@ exports.deleteGrantProposals = async (req, res) => {
                 return res.status(400).json({ message: "Invalid ID format" });
             }
         }
-        const grantProposals = await GrantProposal.updateMany({ _id: { $in: grantProposalIds } }, {
-            isDeleted: true,
-            deletedBy: req.user._id,
-            deletedAt: new Date(),
-            restoreBy: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000)
-        }); // 15 days
-        await Promise.all(grantProposals.map(async (grantProposal) => {
-            await sendGrantProposalDeletedEmail(grantProposal);
-        }));
-        res.status(200).json(grantProposals);
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            await GrantProposal.updateMany(
+                { _id: { $in: grantProposalIds } },
+                {
+                    isDeleted: true,
+                    deletedBy: req.user._id,
+                    deletedAt: new Date(),
+                    restoreBy: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000)
+                },
+                { session }
+            );
+
+            const proposals = await GrantProposal.find({ _id: { $in: grantProposalIds } }).session(session);
+
+            // send emails OUTSIDE transaction
+            await session.commitTransaction();
+            session.endSession();
+
+            await Promise.all(proposals.map((p) => sendGrantProposalDeletedEmail(p)));
+
+        } catch (err) {
+            console.error('Grant proposal deletion error:', err);
+            await session.abortTransaction();
+            session.endSession();
+            throw err;
+        }
+        res.status(200).json({ message: "Grant proposals deleted successfully" });
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Grant proposal deletion error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -689,7 +725,7 @@ exports.deletePermanently = async (req, res) => {
             session.endSession();
         }
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Proposal deletion error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -722,7 +758,7 @@ exports.deletePermanentlyGrant = async (req, res) => {
             session.endSession();
         }
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Grant proposal deletion error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -756,6 +792,7 @@ exports.updateProposal = async (req, res) => {
         // Use transaction for data consistency
         const session = await mongoose.startSession();
         session.startTransaction();
+        let oldStatus = proposal.status;
 
         try {
             if (updates.deadline) proposal.deadline = updates.deadline;
@@ -784,7 +821,7 @@ exports.updateProposal = async (req, res) => {
 
             await session.commitTransaction();
 
-            await sendProposalStatusUpdateEmail(proposal);
+            await sendProposalStatusUpdateEmail(proposal, oldStatus, proposal.status);
             res.status(200).json(proposal);
         } catch (error) {
             await session.abortTransaction();
@@ -793,7 +830,7 @@ exports.updateProposal = async (req, res) => {
             session.endSession();
         }
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Proposal update error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };
@@ -827,7 +864,7 @@ exports.updateGrantProposal = async (req, res) => {
         // Use transaction for data consistency
         const session = await mongoose.startSession();
         session.startTransaction();
-
+        let oldStatus = grantProposal.status;
         try {
             if (updates.deadline) grantProposal.deadline = updates.deadline;
             if (updates.deadline) {
@@ -850,7 +887,7 @@ exports.updateGrantProposal = async (req, res) => {
             await grantProposal.save({ session });
 
             await session.commitTransaction();
-            await sendGrantProposalStatusUpdateEmail(grantProposal);
+            await sendGrantProposalStatusUpdateEmail(grantProposal, oldStatus, grantProposal.status);
             res.status(200).json(grantProposal);
         } catch (error) {
             await session.abortTransaction();
@@ -859,7 +896,7 @@ exports.updateGrantProposal = async (req, res) => {
             session.endSession();
         }
     } catch (error) {
-        console.error('Calendar event error:', error);
+        console.error('Grant proposal update error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };

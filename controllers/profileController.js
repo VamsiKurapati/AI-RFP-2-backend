@@ -16,7 +16,7 @@ const Subscription = require("../models/Subscription");
 const Payment = require("../models/Payments");
 const { summarizePdfBuffer } = require("../utils/documentSummarizer");
 const CalendarEvent = require("../models/CalendarEvents");
-const { sendEmail } = require("../utils/mailSender");
+const { queueEmail } = require("../utils/mailSender");
 const { validateEmail, sanitizeInput, validateRequiredFields } = require("../utils/validation");
 const { cleanupUploadedFiles } = require("../utils/fileCleanup");
 const emailTemplates = require("../utils/emailTemplates");
@@ -38,12 +38,12 @@ const storage = new GridFsStorage({
 });
 
 
-// Utility function to send email and await until mail is sent
+// Utility function to queue employee welcome email
 async function sendEmail_1(email, password, companyName, name) {
     const { subject, body } = await emailTemplates.getEmployeeWelcomeEmail(name, email, password, companyName);
 
     try {
-        await sendEmail(email, subject, body);
+        queueEmail(email, subject, body, 'employeeWelcome');
     } catch (error) {
         throw error;
     }
@@ -1207,7 +1207,7 @@ exports.changePassword = async (req, res) => {
 
         const { subject, body } = await emailTemplates.getPasswordChangedEmail(user.fullName);
 
-        await sendEmail(user.email, subject, body);
+        queueEmail(user.email, subject, body, 'passwordChanged');
 
         res.status(201).json({ message: "Password changed successfully" });
     } catch (error) {

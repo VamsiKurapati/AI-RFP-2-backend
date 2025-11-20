@@ -12,7 +12,7 @@ const Subscription = require("../models/Subscription");
 const Notification = require("../models/Notification");
 const OTP = require("../models/OTP");
 const VerificationCode = require("../models/VerificationCode");
-const { sendEmail } = require("../utils/mailSender");
+const { queueEmail } = require("../utils/mailSender");
 const { validateEmail, validatePassword, sanitizeInput, validateRequiredFields } = require("../utils/validation");
 const { cleanupUploadedFiles } = require("../utils/fileCleanup");
 const emailTemplates = require("../utils/emailTemplates");
@@ -198,9 +198,9 @@ exports.signupWithProfile = [
       const { subject, body } = await emailTemplates.getWelcomeEmail(sanitizedFullName);
 
       try {
-        await sendEmail(sanitizedEmail, subject, body);
+        queueEmail(sanitizedEmail, subject, body, 'welcome');
       } catch (emailError) {
-        console.error('Email sending failed:', emailError);
+        console.error('Email queuing failed:', emailError);
         // Don't fail the signup if email fails
       }
 
@@ -287,9 +287,9 @@ exports.login = async (req, res) => {
       const { subject, body } = await emailTemplates.getLoginAlertEmail(user.fullName, ipAddress);
 
       try {
-        await sendEmail(user.email, subject, body);
+        queueEmail(user.email, subject, body, 'loginAlert');
       } catch (emailError) {
-        console.error('Email sending failed:', emailError);
+        console.error('Email queuing failed:', emailError);
         // Don't fail login if email fails
       }
 
@@ -330,9 +330,9 @@ exports.login = async (req, res) => {
       const { subject, body } = await emailTemplates.getLoginAlertEmail(user.fullName, ipAddress);
 
       try {
-        await sendEmail(user.email, subject, body);
+        queueEmail(user.email, subject, body, 'loginAlert');
       } catch (emailError) {
-        console.error('Email sending failed:', emailError);
+        console.error('Email queuing failed:', emailError);
         // Don't fail login if email fails
       }
 
@@ -409,12 +409,12 @@ exports.forgotPassword = async (req, res) => {
     const { subject, body } = await emailTemplates.getOTPEmail(user.fullName, otp, 'password reset');
 
     try {
-      await sendEmail(sanitizedEmail, subject, body);
+      queueEmail(sanitizedEmail, subject, body, 'otp');
     } catch (emailError) {
-      console.error('Email sending failed:', emailError);
+      console.error('Email queuing failed:', emailError);
       // Clean up OTP record if email fails
       await OTP.deleteOne({ email: sanitizedEmail, otp });
-      return res.status(500).json({ message: "Email sending failed" });
+      return res.status(500).json({ message: "Email queuing failed" });
     }
 
     res.status(200).json({ message: "Password reset email sent" });
@@ -486,7 +486,7 @@ exports.resetPassword = async (req, res) => {
     }
 
     const { subject, body } = await emailTemplates.getPasswordResetSuccessEmail(user.fullName);
-    await sendEmail(user.email, subject, body);
+    queueEmail(user.email, subject, body, 'passwordResetSuccess');
 
     res.status(200).json({ message: "Password reset successfully" });
   } catch (err) {
@@ -514,10 +514,10 @@ exports.sendVerificationEmail = async (req, res) => {
     const { subject, body } = await emailTemplates.getEmailVerificationEmail(verificationCode);
 
     try {
-      await sendEmail(sanitizeInput(email), subject, body);
+      queueEmail(sanitizeInput(email), subject, body, 'emailVerification');
     } catch (emailError) {
-      console.error('Email sending failed:', emailError);
-      return res.status(500).json({ message: "Email sending failed" });
+      console.error('Email queuing failed:', emailError);
+      return res.status(500).json({ message: "Email queuing failed" });
     }
 
     res.status(200).json({ message: "Verification email sent" });

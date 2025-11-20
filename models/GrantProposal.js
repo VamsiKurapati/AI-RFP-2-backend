@@ -21,7 +21,7 @@ const GrantProposalSchema = new mongoose.Schema({
     savedAt: { type: Date, default: null },
     savedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     isRestored: { type: Boolean, default: false },
-    restoredAt: { type: Date, default: null },
+    restoreBy: { type: Date, default: null },
     restoredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     restoredAt: { type: Date, default: null },
 }, { timestamps: true });

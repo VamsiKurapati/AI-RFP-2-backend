@@ -6,7 +6,7 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Payment = require('../models/Payments');
 const CompanyProfile = require('../models/CompanyProfile');
-const { sendEmail } = require('../utils/mailSender');
+const { queueEmail } = require('../utils/mailSender');
 const emailTemplates = require('../utils/emailTemplates');
 const CustomPlan = require('../models/CustomPlan');
 const AddOnPlan = require('../models/AddOnPlan');
@@ -97,9 +97,9 @@ const notifyAddOnSuccess = async ({ user, companyProfile, addOn }) => {
                 ? await emailTemplates.getAddOnActivatedEmail(user.fullName, addOn.name, addOn.price)
                 : { subject: `Add-on "${addOn.name}" activated`, body: `Hello ${user.fullName},\n\nYour add-on "${addOn.name}" has been activated.` };
 
-            await sendEmail(user.email, subject, body);
+            queueEmail(user.email, subject, body, 'addOnActivated');
         } catch (emailErr) {
-            console.error('Failed to send add-on success email:', emailErr.message || emailErr);
+            console.error('Failed to queue add-on success email:', emailErr.message || emailErr);
         }
     } catch (err) {
         console.error('notifyAddOnSuccess error:', err.message || err);
@@ -312,9 +312,9 @@ const sendRefundNotification = async (user, plan, refundId, errorMessage) => {
             errorMessage
         );
 
-        await sendEmail(user.email, subject, body);
+        queueEmail(user.email, subject, body, 'refundNotification');
     } catch (emailError) {
-        console.error('Failed to send refund notification email:', emailError);
+        console.error('Failed to queue refund notification email:', emailError);
     }
 };
 
@@ -657,7 +657,7 @@ const activateSubscription = async (req, res) => {
             endDate
         );
 
-        await sendEmail(req.user.email, subject, body);
+        queueEmail(req.user.email, subject, body, 'paymentSuccess');
 
         res.status(200).json({
             success: true,
@@ -1055,7 +1055,7 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
             start,
             end
         );
-        await sendEmail(user.email, subject, body);
+        queueEmail(user.email, subject, body, 'paymentSuccess');
     } catch (err) {
         const refundSession = await mongoose.startSession();
         refundSession.startTransaction();
@@ -1311,7 +1311,7 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
             customPlan.maxRFPProposalGenerations,
             customPlan.maxGrantProposalGenerations
         );
-        await sendEmail(user.email, subject, body);
+        queueEmail(user.email, subject, body, 'enterprisePaymentSuccess');
     } catch (err) {
         await dbSession.abortTransaction();
 
@@ -1991,9 +1991,9 @@ const activateAddOnSubscription = async (stripeObject) => {
                                     pi,
                                     `Encountered an error and refund couldn't be processed automatically: ${error.message}`
                                 );
-                                await sendEmail(userObj.email, subject, body);
+                                queueEmail(userObj.email, subject, body, 'refundNotification');
                             } catch (e) {
-                                console.error('Failed to send refund required email', e.message || e);
+                                console.error('Failed to queue refund required email', e.message || e);
                             }
                         }
                     }
@@ -2021,9 +2021,9 @@ const activateAddOnSubscription = async (stripeObject) => {
                                 sessionId,
                                 `Encountered an error and no payment_intent found: ${error.message}`
                             );
-                            await sendEmail(userObj.email, subject, body);
+                            queueEmail(userObj.email, subject, body, 'refundNotification');
                         } catch (e) {
-                            console.error('Failed to send refund required email', e.message || e);
+                            console.error('Failed to queue refund required email', e.message || e);
                         }
                     }
                 }

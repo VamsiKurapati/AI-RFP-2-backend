@@ -17,7 +17,7 @@ const emailTemplates = require("../utils/emailTemplates");
 const EmailContent = require("../models/EmailContent");
 const AddOnPlan = require("../models/AddOnPlan");
 
-const { sendEmail } = require("../utils/mailSender");
+const { queueEmail } = require("../utils/mailSender");
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
@@ -742,14 +742,8 @@ exports.sendEmail = async (req, res) => {
       stripeSession.url
     );
 
-    const mailOptions = {
-      from: process.env.MAIL_USER,
-      to: email,
-      subject: subject,
-      html: body
-    };
-
-    await transporter.sendMail(mailOptions);
+    // Queue enterprise plan email (payment-related, priority 1)
+    queueEmail(email, subject, body, 'enterprisePlan');
 
     res.status(200).json({
       message: 'Custom enterprise plan created and email sent successfully',
@@ -835,21 +829,8 @@ exports.editCustomPlan = async (req, res) => {
     AdminPaymenyData = paymentDetails[0];
   }
 
-  const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true,
-    auth: {
-      user: process.env.MAIL_USER,
-      pass: process.env.MAIL_PASS,
-    },
-  });
-
-  const mailOptions = {
-    from: process.env.MAIL_USER,
-    to: customPlan.email,
-    subject: `RFP2GRANTS - Enterprise Subscription Plan Request`,
-    html: `
+  const emailSubject = `RFP2GRANTS - Enterprise Subscription Plan Request`;
+  const emailBody = `
       <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #333;">
         <h2 style="color: #2563EB;">RFP2GRANTS - Enterprise Subscription Plan Request</h2>
         <p><strong>Email:</strong> ${customPlan.email}</p>
@@ -871,12 +852,12 @@ exports.editCustomPlan = async (req, res) => {
         <p><strong>Branch Name:</strong> ${AdminPaymenyData.branch_name || "Not provided"}</p>
         <p style="font-size: 12px; color: #666;">This email was generated from the Enterprise Plan Request.</p>
       </div>
-    `,
-  };
+    `;
 
   try {
-    const info = await transporter.sendMail(mailOptions);
-    res.status(200).json({ message: "Email sent successfully!" });
+    // Queue enterprise plan request email (payment-related, priority 1)
+    queueEmail(customPlan.email, emailSubject, emailBody, 'enterprisePlan');
+    res.status(200).json({ message: "Email queued successfully!" });
   } catch (error) {
     console.error('Error in editCustomPlan:', error);
     res.status(500).json({ message: error.message });
@@ -1098,7 +1079,7 @@ exports.deactivateSubscription = async (req, res) => {
 
       //Send email to the user
       const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(userToDeactivateSubscription.fullName, userToDeactivateSubscription.email, note);
-      await sendEmail(userToDeactivateSubscription.email, subject, body);
+      queueEmail(userToDeactivateSubscription.email, subject, body, 'subscriptionDeactivated');
       res.status(200).json({ message: "User subscription deactivated successfully" });
     }
     catch (error) {
@@ -1168,7 +1149,7 @@ exports.assignNewSubscriptionToUser = async (req, res) => {
 
       //Send email to the user
       const { subject, body } = await emailTemplates.getSubscriptionActivatedEmail(userToAssignNewSubscription.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
-      await sendEmail(userToAssignNewSubscription.email, subject, body);
+      queueEmail(userToAssignNewSubscription.email, subject, body, 'subscriptionActivated');
       res.status(200).json({ message: "New subscription assigned to user successfully" });
     }
     catch (error) {
@@ -1216,7 +1197,7 @@ exports.updateUserSubscription = async (req, res) => {
 
       //Send email to the user
       const { subject, body } = await emailTemplates.getSubscriptionUpdatedEmail(userToUpdateSubscription.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
-      await sendEmail(userToUpdateSubscription.email, subject, body);
+      queueEmail(userToUpdateSubscription.email, subject, body, 'subscriptionUpdated');
 
       res.status(200).json({ message: "User subscription updated successfully" });
     }
@@ -1250,7 +1231,7 @@ exports.bulkDeactivateSubscriptions = async (req, res) => {
         await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
 
         const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(userToDeactivateSubscription.fullName, userToDeactivateSubscription.email, note);
-        await sendEmail(userToDeactivateSubscription.email, subject, body);
+        queueEmail(userToDeactivateSubscription.email, subject, body, 'subscriptionDeactivated');
       }));
 
       res.status(200).json({ message: "Subscriptions deactivated successfully" });
@@ -1430,7 +1411,7 @@ exports.sendCustomEmail = async (req, res) => {
       emails = customEmails;
     }
     await Promise.all(emails.map(async (email) => {
-      await sendEmail(email, subject, body);
+      queueEmail(email, subject, body, 3); // General notification, priority 3
     }));
     res.status(200).json({ message: emails.length > 0 ? emails.length === 1 ? "Email sent successfully" : "Emails sent successfully" : "No members found to send email" });
   } catch (error) {

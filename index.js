@@ -21,9 +21,18 @@ const Contact = require('./models/Contact.js');
 const { handleWebhook } = require('./controllers/stripeController');
 const { validateEmail } = require('./utils/validation');
 const { getContactFormEmail } = require('./utils/emailTemplates');
+const { queueEmail } = require('./utils/mailSender');
 
 const dbConnect = require('./utils/dbConnect.js');
 require('./utils/cronJob.js');
+
+// Initialize email queue processor
+const { emailQueue } = require('./utils/emailQueue');
+const { sendEmail } = require('./utils/mailSender');
+
+// Start processing email queue in background
+emailQueue.startProcessing(sendEmail);
+console.log('Email queue processor started');
 
 const getSubscriptionPlansData = async (req, res) => {
   try {
@@ -59,7 +68,7 @@ const getSubscriptionPlansData = async (req, res) => {
   }
 };
 
-const sendEmail = async (req, res) => {
+const sendEmail_contactForm = async (req, res) => {
   try {
     const { name, company, email, description } = req.body;
 
@@ -98,16 +107,6 @@ const sendEmail = async (req, res) => {
       status: "Open"
     });
 
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
-      auth: {
-        user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS,
-      },
-    });
-
     const { subject, body } = await getContactFormEmail(
       sanitizedName,
       sanitizedEmail,
@@ -115,16 +114,9 @@ const sendEmail = async (req, res) => {
       sanitizedDescription
     );
 
-    const mailOptions = {
-      from: process.env.MAIL_USER,
-      to: process.env.SUPPORT_EMAIL,
-      replyTo: sanitizedEmail,
-      subject: subject,
-      html: body,
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    res.status(200).json({ message: "Email sent successfully!" });
+    // Queue contact form email (general notification, priority 3)
+    queueEmail(process.env.SUPPORT_EMAIL, subject, body, 'contactForm');
+    res.status(200).json({ message: "Email queued successfully!" });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Failed to send email." });
@@ -157,7 +149,7 @@ const getAddOnPlans = async (req, res) => {
 };
 
 app.get('/getAddOnPlans', getAddOnPlans);
-app.post('/contact', sendEmail);
+app.post('/contact', sendEmail_contactForm);
 
 // Register routes before starting server
 app.use('/proposals', proposalRoute);

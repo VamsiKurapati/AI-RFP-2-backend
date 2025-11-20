@@ -17,7 +17,7 @@ const Subscription = require('../models/Subscription');
 const User = require('../models/User');
 const CompanyProfile = require('../models/CompanyProfile');
 const emailTemplates = require('../utils/emailTemplates');
-const { sendEmail } = require('../utils/mailSender');
+const { queueEmail } = require('../utils/mailSender');
 
 //Trigger Grant Cron Job to fetch Grants from the Grant API and save them to the database
 exports.fetchGrants = async () => {
@@ -408,7 +408,7 @@ exports.sendNewRFPEmailsToUsers = async () => {
         console.log(`Found ${users.length} users to send new RFP emails to`);
         await Promise.all(users.map(async (user) => {
             const { subject, body } = await emailTemplates.getNewRFPAlertEmail(user);
-            await sendEmail(user.email, subject, body);
+            queueEmail(user.email, subject, body, 'newRFPAlert');
         }));
         console.log('New RFP emails sent successfully');
         return { message: "New RFP emails sent successfully" };
@@ -438,9 +438,9 @@ exports.sendProposalDueDateReminderEmails = async () => {
             const noOfDaysRemaining = Math.ceil((new Date(proposal.deadline) - today) / (1000 * 60 * 60 * 24));
             const { subject, body } = await emailTemplates.getProposalDueDateReminderEmail(user.fullName, proposal.title, proposal.deadline, noOfDaysRemaining, 'RFP');
             try {
-                await sendEmail(proposal.companyMail, subject, body);
+                queueEmail(proposal.companyMail, subject, body, 'proposalDueDateReminder');
             } catch (error) {
-                console.error('Error sending proposal due date reminder email:', error);
+                console.error('Error queuing proposal due date reminder email:', error);
             }
         }));
     } catch (error) {
@@ -469,9 +469,9 @@ exports.sendGrantProposalDueDateReminderEmails = async () => {
             const noOfDaysRemaining = Math.ceil((new Date(grantProposal.deadline) - today) / (1000 * 60 * 60 * 24));
             const { subject, body } = await emailTemplates.getProposalDueDateReminderEmail(user.fullName, grantProposal.title, grantProposal.deadline, noOfDaysRemaining, 'Grant');
             try {
-                await sendEmail(grantProposal.companyMail, subject, body);
+                queueEmail(grantProposal.companyMail, subject, body, 'proposalDueDateReminder');
             } catch (error) {
-                console.error('Error sending grant proposal due date reminder email:', error);
+                console.error('Error queuing grant proposal due date reminder email:', error);
             }
         }));
         console.log('Grant proposal due date reminder emails sent successfully');
