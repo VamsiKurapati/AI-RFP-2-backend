@@ -24,35 +24,60 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 // Merged Company Stats and Company Data API
 exports.getCompanyStatsAndData = async (req, res) => {
   try {
-    const totalCompanies = await CompanyProfile.countDocuments();
-    const totalProposals = await Proposal.countDocuments() + await GrantProposal.countDocuments();
-    const activeUsers = await User.countDocuments({ subscription_status: "active", role: "company" });
-    const inactiveUsers = await User.countDocuments({ subscription_status: "inactive", role: "company" });
+    // Parallelize independent count queries
+    const [totalCompanies, proposalCount, grantProposalCount, activeUsers, inactiveUsers] = await Promise.all([
+      CompanyProfile.countDocuments(),
+      Proposal.countDocuments(),
+      GrantProposal.countDocuments(),
+      User.countDocuments({ subscription_status: "active", role: "company" }),
+      User.countDocuments({ subscription_status: "inactive", role: "company" })
+    ]);
 
-    const companies = await CompanyProfile.find();
-    // For each company, find the user's current subscription and attach plan_name
-    const userIds = companies.map(company => company.userId);
-    // Fetch all subscriptions for these users
-    const subscriptions = await Subscription.find({ user_id: { $in: userIds } });
-    // Map user_id to plan_name for quick lookup (get latest subscription per user)
-    const userPlanMap = {};
-    subscriptions.forEach(sub => {
-      const key = sub.user_id ? sub.user_id.toString() : undefined;
-      if (!key) return;
-      // If multiple subscriptions, pick the latest by end_date
-      if (!userPlanMap[key] || (userPlanMap[key].end_date < sub.end_date)) {
-        userPlanMap[key] = {
-          plan_name: sub.plan_name,
-          end_date: sub.end_date
-        };
+    const totalProposals = proposalCount + grantProposalCount;
+
+    // Use aggregation pipeline to get companies with latest subscription plan_name
+    // This replaces multiple queries and manual mapping with a single database operation
+    const companies = await CompanyProfile.aggregate([
+      {
+        $lookup: {
+          from: 'subscriptions',
+          localField: 'userId',
+          foreignField: 'user_id',
+          as: 'subscriptions'
+        }
+      },
+      {
+        $addFields: {
+          latestSubscription: {
+            $arrayElemAt: [
+              {
+                $slice: [
+                  {
+                    $sortArray: {
+                      input: '$subscriptions',
+                      sortBy: { end_date: -1 }
+                    }
+                  },
+                  1
+                ]
+              },
+              0
+            ]
+          }
+        }
+      },
+      {
+        $addFields: {
+          plan_name: { $ifNull: ['$latestSubscription.plan_name', null] }
+        }
+      },
+      {
+        $project: {
+          subscriptions: 0,
+          latestSubscription: 0
+        }
       }
-    });
-    // Attach plan_name to each company
-    companies.forEach(company => {
-      const key = company.userId ? company.userId.toString() : undefined;
-      const planInfo = key ? userPlanMap[key] : null;
-      company._doc.plan_name = planInfo ? planInfo.plan_name : null;
-    });
+    ]);
 
     res.json({
       stats: {
@@ -126,13 +151,28 @@ exports.getSupportStatsAndData = async (req, res) => {
 
     const supportUniqueUserIds = [...new Set(supportUserIds.map(id => id.toString()))];
 
-    // Fetch company profiles in bulk
+    // Parallelize independent queries
     let companiesMap = {};
+    let userMap = {};
+    let employeeMap = {};
+    let companyEmailMap = {};
+
     if (supportUniqueUserIds.length > 0) {
-      const companies = await CompanyProfile.find(
-        { _id: { $in: supportUniqueUserIds } },
-        { companyName: 1, logoUrl: 1 }
-      );
+      // Get unique company emails from employee profiles first (needed for parallel query)
+      const employeeProfilesTemp = await EmployeeProfile.find({ userId: { $in: supportUniqueUserIds } }).lean();
+      const companyEmails = employeeProfilesTemp.map(emp => emp.companyMail).filter(email => email);
+      const uniqueCompanyEmails = [...new Set(companyEmails)];
+
+      // Parallelize all independent queries
+      const [companies, users, employeeProfiles, companyProfiles] = await Promise.all([
+        CompanyProfile.find(
+          { _id: { $in: supportUniqueUserIds } },
+          { companyName: 1, logoUrl: 1 }
+        ).lean(),
+        User.find({ _id: { $in: supportUniqueUserIds } }).lean(),
+        EmployeeProfile.find({ userId: { $in: supportUniqueUserIds } }).lean(),
+        CompanyProfile.find({ email: { $in: uniqueCompanyEmails } }).lean()
+      ]);
 
       companiesMap = companies.reduce((acc, company) => {
         acc[company._id.toString()] = {
@@ -141,32 +181,22 @@ exports.getSupportStatsAndData = async (req, res) => {
         };
         return acc;
       }, {});
+
+      userMap = users.reduce((acc, user) => {
+        acc[user._id.toString()] = user;
+        return acc;
+      }, {});
+
+      employeeMap = employeeProfiles.reduce((acc, emp) => {
+        acc[emp.userId.toString()] = emp;
+        return acc;
+      }, {});
+
+      companyEmailMap = companyProfiles.reduce((acc, company) => {
+        acc[company.email] = company;
+        return acc;
+      }, {});
     }
-
-    // Bulk fetch all users
-    const users = await User.find({ _id: { $in: supportUniqueUserIds } });
-    const userMap = users.reduce((acc, user) => {
-      acc[user._id.toString()] = user;
-      return acc;
-    }, {});
-
-    // Bulk fetch all employee profiles
-    const employeeProfiles = await EmployeeProfile.find({ userId: { $in: supportUniqueUserIds } });
-    const employeeMap = employeeProfiles.reduce((acc, emp) => {
-      acc[emp.userId.toString()] = emp;
-      return acc;
-    }, {});
-
-    // Get unique company emails from employee profiles
-    const companyEmails = employeeProfiles.map(emp => emp.companyMail).filter(email => email);
-    const uniqueCompanyEmails = [...new Set(companyEmails)];
-
-    // Bulk fetch company profiles
-    const companyProfiles = await CompanyProfile.find({ email: { $in: uniqueCompanyEmails } });
-    const companyEmailMap = companyProfiles.reduce((acc, company) => {
-      acc[company.email] = company;
-      return acc;
-    }, {});
 
     // Add companyName and logoUrl to tickets
     const supportWithCompany = supportTickets.map((ticket) => {
@@ -196,139 +226,38 @@ exports.getSupportStatsAndData = async (req, res) => {
       };
     });
 
-    // Initialize counters
-    let BillingPayments = 0;
-    let ProposalIssues = 0;
-    let AccountAccess = 0;
-    let TechnicalErrors = 0;
-    let FeatureRequests = 0;
-    let Others = 0;
-
-    //Initialize counters for each category
-    let BillingPaymentsCompleted = 0;
-    let ProposalIssuesCompleted = 0;
-    let AccountAccessCompleted = 0;
-    let TechnicalErrorsCompleted = 0;
-    let FeatureRequestsCompleted = 0;
-    let OthersCompleted = 0;
-
-    //Initialize counters for each category
-    let BillingPaymentsEnterprise = 0;
-    let ProposalIssuesEnterprise = 0;
-    let AccountAccessEnterprise = 0;
-    let TechnicalErrorsEnterprise = 0;
-    let FeatureRequestsEnterprise = 0;
-    let OthersEnterprise = 0;
-
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-
-    //Filter the tickets into three categories: Completed, Enterprise, and Other
+    // Filter the tickets into three categories: Completed, Enterprise, and Other
     const completedTickets = supportWithCompany.filter(ticket => ticket.status === "Completed");
     const enterpriseTickets = supportWithCompany.filter(ticket => (ticket.plan_name === "Enterprise" || ticket.plan_name === "Custom Enterprise Plan") && ticket.status !== "Completed");
     const otherTickets = supportWithCompany.filter(ticket => ticket.plan_name !== "Enterprise" && ticket.plan_name !== "Custom Enterprise Plan" && ticket.status !== "Completed");
 
-    completedTickets.forEach(ticket => {
-      // const createdAt = new Date(ticket.createdAt);
-      // if (createdAt.getMonth() === currentMonth && createdAt.getFullYear() === currentYear) {
-      switch (ticket.category) {
-        case "Billing & Payments":
-          BillingPaymentsCompleted++;
-          break;
-        case "Proposal Issues":
-          ProposalIssuesCompleted++;
-          break;
-        case "Account & Access":
-          AccountAccessCompleted++;
-          break;
-        case "Technical Errors":
-          TechnicalErrorsCompleted++;
-          break;
-        case "Feature Requests":
-          FeatureRequestsCompleted++;
-          break;
-        default:
-          OthersCompleted++;
-      }
-      // }
-    });
+    // Use aggregation to count categories instead of manual loops
+    const categoryCounts = (tickets) => {
+      const counts = tickets.reduce((acc, ticket) => {
+        const category = ticket.category || "Others";
+        acc[category] = (acc[category] || 0) + 1;
+        return acc;
+      }, {});
 
-    enterpriseTickets.forEach(ticket => {
-      //  const createdAt = new Date(ticket.createdAt);
-      // if (createdAt.getMonth() === currentMonth && createdAt.getFullYear() === currentYear) {
-      switch (ticket.category) {
-        case "Billing & Payments":
-          BillingPaymentsEnterprise++;
-          break;
-        case "Proposal Issues":
-          ProposalIssuesEnterprise++;
-          break;
-        case "Account & Access":
-          AccountAccessEnterprise++;
-          break;
-        case "Technical Errors":
-          TechnicalErrorsEnterprise++;
-          break;
-        case "Feature Requests":
-          FeatureRequestsEnterprise++;
-          break;
-        default:
-          OthersEnterprise++;
-      }
-      // }
-    });
+      return {
+        "Billing & Payments": counts["Billing & Payments"] || 0,
+        "Proposal Issues": counts["Proposal Issues"] || 0,
+        "Account & Access": counts["Account & Access"] || 0,
+        "Technical Errors": counts["Technical Errors"] || 0,
+        "Feature Requests": counts["Feature Requests"] || 0,
+        "Others": Object.keys(counts).filter(k => !["Billing & Payments", "Proposal Issues", "Account & Access", "Technical Errors", "Feature Requests"].includes(k))
+          .reduce((sum, k) => sum + (counts[k] || 0), 0) + (counts["Others"] || 0)
+      };
+    };
 
-    otherTickets.forEach(ticket => {
-      // const createdAt = new Date(ticket.createdAt);
-      // if (createdAt.getMonth() === currentMonth && createdAt.getFullYear() === currentYear) {
-      switch (ticket.category) {
-        case "Billing & Payments":
-          BillingPayments++;
-          break;
-        case "Proposal Issues":
-          ProposalIssues++;
-          break;
-        case "Account & Access":
-          AccountAccess++;
-          break;
-        case "Technical Errors":
-          TechnicalErrors++;
-          break;
-        case "Feature Requests":
-          FeatureRequests++;
-          break;
-        default:
-          Others++;
-      }
-      // }
-    });
+    const TicketStats = categoryCounts(otherTickets);
+    const TicketStatsCompleted = categoryCounts(completedTickets);
+    const TicketStatsEnterprise = categoryCounts(enterpriseTickets);
 
     res.json({
-      TicketStats: {
-        "Billing & Payments": BillingPayments,
-        "Proposal Issues": ProposalIssues,
-        "Account & Access": AccountAccess,
-        "Technical Errors": TechnicalErrors,
-        "Feature Requests": FeatureRequests,
-        "Others": Others,
-      },
-      TicketStatsCompleted: {
-        "Billing & Payments": BillingPaymentsCompleted,
-        "Proposal Issues": ProposalIssuesCompleted,
-        "Account & Access": AccountAccessCompleted,
-        "Technical Errors": TechnicalErrorsCompleted,
-        "Feature Requests": FeatureRequestsCompleted,
-        "Others": OthersCompleted,
-      },
-      TicketStatsEnterprise: {
-        "Billing & Payments": BillingPaymentsEnterprise,
-        "Proposal Issues": ProposalIssuesEnterprise,
-        "Account & Access": AccountAccessEnterprise,
-        "Technical Errors": TechnicalErrorsEnterprise,
-        "Feature Requests": FeatureRequestsEnterprise,
-        "Others": OthersEnterprise,
-      },
+      TicketStats,
+      TicketStatsCompleted,
+      TicketStatsEnterprise,
       supportTicketsData: otherTickets,
       enterpriseTicketsData: enterpriseTickets,
       completedTicketsData: completedTickets
@@ -399,140 +328,110 @@ exports.addAdminMessage = async (req, res) => {
 // Get Payment Summary and Payment Data
 exports.getPaymentsSummaryAndData = async (req, res) => {
   try {
-    // Fetch all payments
-    const payments = await Payment.find();
-
-    // Collect all unique user_ids from payments
-    const userIds = payments
-      .map(payment => payment.user_id)
-      .filter(id => !!id);
-
-    // Remove duplicates
-    const uniqueUserIds = [...new Set(userIds.map(id => id.toString()))];
-
-    // Fetch companies in bulk from CompanyProfile by userId
-    let companiesMap = {};
-    if (uniqueUserIds.length > 0) {
-      const companies = await require("../models/CompanyProfile").find(
-        { userId: { $in: uniqueUserIds } },
-        { companyName: 1, userId: 1 }
-      );
-
-      companiesMap = companies.reduce((acc, company) => {
-        if (company.userId) {
-          acc[company.userId.toString()] = company.companyName;
-        }
-        return acc;
-      }, {});
-    }
-
-    // For each payment, fetch the plan_name from the related Subscription and attach it
-    // Collect all unique subscription_ids from payments
-    const subscriptionIds = payments
-      .map(payment => payment.subscription_id)
-      .filter(id => !!id);
-
-    // Remove duplicates
-    const uniqueSubscriptionIds = [...new Set(subscriptionIds.map(id => id.toString()))];
-
-    // Fetch subscriptions in bulk
-    let subscriptionMap = {};
-    if (uniqueSubscriptionIds.length > 0) {
-      const subscriptions = await Subscription.find(
-        { _id: { $in: uniqueSubscriptionIds } },
-        { plan_name: 1 }
-      );
-      subscriptionMap = subscriptions.reduce((acc, sub) => {
-        acc[sub._id.toString()] = sub.plan_name;
-        return acc;
-      }, {});
-    }
-
-    const subcriptions = await Subscription.find().populate("user_id", "email").lean();
-
-    // Add companyName to each payment
-    const paymentsWithCompanyName = await Promise.all(payments.map(async (payment) => {
-      const companyName = payment.user_id
-        ? companiesMap[payment.user_id.toString()] || "Unknown Company"
-        : "Unknown Company";
-
-      const planName = payment.subscription_id
-        ? subscriptionMap[payment.subscription_id.toString()] || "Unknown Plan"
-        : "Unknown Plan";
-
-      return {
-        ...payment.toObject(),
-        companyName,
-        planName,
-        email: (() => {
-          const subscription = subcriptions.find(sub => sub._id.toString() === payment.subscription_id.toString());
-          if (subscription && subscription.user_id && subscription.user_id.email) {
-            return subscription.user_id.email;
-          }
-          return "Unknown Email";
-        })(),
-        ...(subcriptions.find(sub => sub._id.toString() === payment.subscription_id.toString()) || {})
-      };
-    }));
-
-    // Initialize stats
-    let totalRevenue = 0;
-    // let successfulPayments = 0;
-    // let failedPayments = 0;
-    let revenueThisMonth = 0;
-    // let totalRefunds = 0;
-    // let pendingRefunds = 0;
-    let activeUsers = 0;
-    let inactiveUsers = 0;
     const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    payments.forEach(payment => {
-      if (payment.status === 'Success') {
-        // successfulPayments += 1;
-        totalRevenue += payment.price;
-
-        if (payment.paid_at) {
-          const paidAt = new Date(payment.paid_at);
-          if (
-            paidAt.getMonth() === currentMonth &&
-            paidAt.getFullYear() === currentYear
-          ) {
-            revenueThisMonth += payment.price;
+    // Use aggregation pipeline to join payments with related data and calculate stats
+    // This replaces multiple queries and manual mapping with efficient database operations
+    const [paymentsWithCompanyName, revenueStats, activeUsers, inactiveUsers] = await Promise.all([
+      Payment.aggregate([
+        // Lookup company profile via user_id
+        {
+          $lookup: {
+            from: 'companyprofiles',
+            localField: 'user_id',
+            foreignField: 'userId',
+            as: 'company'
+          }
+        },
+        // Lookup subscription to get plan_name and user_id for email
+        {
+          $lookup: {
+            from: 'subscriptions',
+            localField: 'subscription_id',
+            foreignField: '_id',
+            as: 'subscription'
+          }
+        },
+        // Lookup user email via subscription's user_id
+        {
+          $lookup: {
+            from: 'users',
+            let: { userId: { $ifNull: [{ $arrayElemAt: ['$subscription.user_id', 0] }, null] } },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$_id', '$$userId'] } } },
+              { $project: { email: 1 } }
+            ],
+            as: 'user'
+          }
+        },
+        // Add computed fields
+        {
+          $addFields: {
+            companyName: {
+              $ifNull: [
+                { $arrayElemAt: ['$company.companyName', 0] },
+                'Unknown Company'
+              ]
+            },
+            planName: {
+              $ifNull: [
+                { $arrayElemAt: ['$subscription.plan_name', 0] },
+                'Unknown Plan'
+              ]
+            },
+            email: {
+              $ifNull: [
+                { $arrayElemAt: ['$user.email', 0] },
+                'Unknown Email'
+              ]
+            }
+          }
+        },
+        // Remove temporary lookup arrays
+        {
+          $project: {
+            company: 0,
+            subscription: 0,
+            user: 0
+          }
+        },
+        // Sort by creation date (most recent first)
+        {
+          $sort: { createdAt: -1 }
+        }
+      ]),
+      // Calculate revenue stats
+      Payment.aggregate([
+        { $match: { status: 'Success' } },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: '$price' },
+            revenueThisMonth: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $gte: ['$paid_at', startOfMonth] }, { $lt: ['$paid_at', now] }] },
+                  '$price',
+                  0
+                ]
+              }
+            }
           }
         }
-      }
+      ]),
+      User.countDocuments({ subscription_status: "active", role: "company" }),
+      User.countDocuments({ subscription_status: "inactive", role: "company" })
+    ]);
 
-      // if (payment.status === 'Failed') {
-      //   failedPayments += 1;
-      // }
-
-      // if (payment.status === 'Refunded') {
-      //   totalRefunds += 1;
-      // }
-
-      // if (
-      //   payment.status === 'Pending Refund' ||
-      //   payment.status === 'Pending Refund' ||
-      //   payment.status === 'Pending Refund, Refunded'
-      // ) {
-      //   pendingRefunds += 1;
-      // }
-    });
-
-    activeUsers = await User.countDocuments({ subscription_status: "active", role: "company" });
-    inactiveUsers = await User.countDocuments({ subscription_status: "inactive", role: "company" });
+    const totalRevenue = revenueStats.length > 0 ? revenueStats[0].totalRevenue || 0 : 0;
+    const revenueThisMonth = revenueStats.length > 0 ? revenueStats[0].revenueThisMonth || 0 : 0;
 
     res.json({
       PaymentStats: {
         "Total Revenue": `${totalRevenue}`,
-        // "Successful Payments": successfulPayments,
-        // "Failed Payments": failedPayments,
         "Active Subscriptions": `${activeUsers}`,
         "Inactive Subscriptions": `${inactiveUsers}`,
-        // "Total Refunds": totalRefunds,
-        // "Pending Refunds": pendingRefunds,
         "Revenue This Month": `${revenueThisMonth}`
       },
       PaymentData: paymentsWithCompanyName
@@ -759,27 +658,55 @@ exports.sendEmail = async (req, res) => {
 //Fetch the subscriptions of all users
 exports.getSubscriptionsOfAllUsers = async (req, res) => {
   try {
-    const subscriptions = await Subscription.find({ user_id: { $ne: null } });
-
-    //Now just verify if the users exist and have company profiles. If exists then add the respective subscription data to the subscriptions
-
-    const userSubscriptions = subscriptions.map(async (subscription) => {
-      const user = await User.findOne({ _id: subscription.user_id });
-      if (!user) {
-        return null;
+    // Use aggregation pipeline to join subscriptions with users and company profiles
+    // This replaces N+1 queries with a single efficient database operation
+    const userSubscriptions = await Subscription.aggregate([
+      // Filter out subscriptions without user_id
+      { $match: { user_id: { $ne: null } } },
+      // Lookup user information
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      // Filter out subscriptions where user doesn't exist
+      { $match: { 'user.0': { $exists: true } } },
+      // Lookup company profile via user_id
+      {
+        $lookup: {
+          from: 'companyprofiles',
+          localField: 'user_id',
+          foreignField: 'userId',
+          as: 'companyProfile'
+        }
+      },
+      // Filter out subscriptions where company profile doesn't exist
+      { $match: { 'companyProfile.0': { $exists: true } } },
+      // Add computed fields
+      {
+        $addFields: {
+          userName: { $arrayElemAt: ['$user.fullName', 0] },
+          userEmail: { $arrayElemAt: ['$user.email', 0] },
+          companyName: { $arrayElemAt: ['$companyProfile.companyName', 0] }
+        }
+      },
+      // Remove temporary lookup arrays
+      {
+        $project: {
+          user: 0,
+          companyProfile: 0
+        }
+      },
+      // Sort by creation date (most recent first)
+      {
+        $sort: { createdAt: -1 }
       }
-      const companyProfile = await CompanyProfile.findOne({ userId: user._id });
-      if (!companyProfile) {
-        return null;
-      }
-      return {
-        ...subscription.toObject(),
-        userName: user.fullName,
-        userEmail: user.email,
-        companyName: companyProfile.companyName
-      };
-    });
-    res.status(200).json(await Promise.all(userSubscriptions));
+    ]);
+
+    res.status(200).json(userSubscriptions);
   } catch (err) {
     res.status(500).json({ message: "Error fetching subscriptions of all users", error: err.message });
   }

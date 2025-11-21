@@ -84,6 +84,7 @@ paymentSchema.index({ createdAt: -1 });
 // Compound indexes for common query patterns
 paymentSchema.index({ user_id: 1, status: 1 });
 paymentSchema.index({ status: 1, paid_at: -1 });
+paymentSchema.index({ user_id: 1, status: 1, paid_at: -1 }); // Recommended index for user payment queries
 paymentSchema.index({ subscription_id: 1, status: 1 });
 paymentSchema.index({ refund_id: 1 });
 paymentSchema.index({ refunded_at: -1 });

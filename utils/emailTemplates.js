@@ -5,6 +5,43 @@ const EmailContent = require('../models/EmailContent');
 // Format: { "IP_ADDRESS": { locationInfo: "City, Region, Country", timestamp: 1690000000000 } }
 const ipCache = {};
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_CACHE_SIZE = 10000; // Maximum number of entries before cleanup
+const CLEANUP_INTERVAL = 60 * 60 * 1000; // Cleanup every hour
+
+/**
+ * Clean up expired cache entries and enforce max cache size
+ * Removes oldest entries if cache exceeds MAX_CACHE_SIZE
+ */
+function cleanupIpCache() {
+    const now = Date.now();
+    const entries = Object.entries(ipCache);
+
+    // Remove expired entries
+    entries.forEach(([ip, data]) => {
+        if (now - data.timestamp >= CACHE_TTL) {
+            delete ipCache[ip];
+        }
+    });
+
+    // If cache is still too large, remove oldest entries
+    const remainingEntries = Object.entries(ipCache);
+    if (remainingEntries.length > MAX_CACHE_SIZE) {
+        // Sort by timestamp (oldest first) and remove excess
+        remainingEntries
+            .sort((a, b) => a[1].timestamp - b[1].timestamp)
+            .slice(0, remainingEntries.length - MAX_CACHE_SIZE)
+            .forEach(([ip]) => {
+                delete ipCache[ip];
+            });
+    }
+}
+
+// Periodic cleanup - run every hour
+if (typeof setInterval !== 'undefined') {
+    setInterval(cleanupIpCache, CLEANUP_INTERVAL);
+    // Initial cleanup check
+    cleanupIpCache();
+}
 
 async function getLocationFromIP(ipAddress) {
     if (!ipAddress) return 'Unknown Location';
@@ -15,6 +52,11 @@ async function getLocationFromIP(ipAddress) {
     // If cached and still valid, return it
     if (cached && now - cached.timestamp < CACHE_TTL) {
         return cached.locationInfo;
+    }
+
+    // Periodically clean up cache (every 100 lookups)
+    if (Object.keys(ipCache).length % 100 === 0) {
+        cleanupIpCache();
     }
 
     try {

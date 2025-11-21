@@ -16,6 +16,7 @@ const { queueEmail } = require("../utils/mailSender");
 const { validateEmail, validatePassword, sanitizeInput, validateRequiredFields } = require("../utils/validation");
 const { cleanupUploadedFiles } = require("../utils/fileCleanup");
 const emailTemplates = require("../utils/emailTemplates");
+// const { invalidatePreviousToken, setActiveToken, blacklistToken, invalidateAllUserTokens } = require("../utils/tokenManager");
 
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
@@ -39,25 +40,6 @@ const multiUpload = upload.fields([
   { name: "documents", maxCount: 10 },
   { name: "proposals", maxCount: 10 },
 ]);
-
-const passwordValidator = (password) => {
-  // At least 8 characters
-  if (password.length < 8) return false;
-
-  // Regular expressions
-  const uppercase = /[A-Z]/;
-  const lowercase = /[a-z]/;
-  const digits = /[0-9]/;
-  const special = /[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/;
-
-  if (!uppercase.test(password)) return false;
-  if (!lowercase.test(password)) return false;
-  if (!digits.test(password)) return false;
-  if (!special.test(password)) return false;
-
-  return true;
-};
-
 
 exports.signupWithProfile = [
   multiUpload,
@@ -264,11 +246,17 @@ exports.login = async (req, res) => {
       }
     }
 
+    // Invalidate previous token (single-device login)
+    // await invalidatePreviousToken(user._id.toString());
+
     const token = jwt.sign(
       { user: userWithoutPassword },
       process.env.JWT_SECRET,
       { expiresIn: "12h", issuer: "rfp-grants-api", audience: "rfp-grants-client" }
     );
+
+    // Set this token as the active token for the user
+    // await setActiveToken(user._id.toString(), token, 12 * 60 * 60); // 12 hours in seconds
 
     if (user.role === "SuperAdmin" || user.role === "company") {
       const subscription = await Subscription.find({ user_id: user._id }).sort({ created_at: -1 }).limit(1).lean();
@@ -360,20 +348,45 @@ exports.logout = async (req, res) => {
       return res.status(400).json({ message: "Token missing" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.user._id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    // Try to decode token (even if expired) to get user ID
+    let decoded;
+    let userId = null;
+
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      userId = decoded.user._id;
+    } catch (err) {
+      // If token is expired, try to decode without verification to get user ID
+      if (err.name === 'TokenExpiredError') {
+        decoded = jwt.decode(token);
+        if (decoded && decoded.user) {
+          userId = decoded.user._id;
+        }
+      } else {
+        // For other errors, still try to decode
+        decoded = jwt.decode(token);
+        if (decoded && decoded.user) {
+          userId = decoded.user._id;
+        }
+      }
     }
+
+    // If we have a user ID, invalidate tokens
+    if (userId) {
+      // Blacklist the token (even if expired, blacklist until it would have expired)
+      // await blacklistToken(token, 12 * 60 * 60);
+
+      // Remove active token (allows user to login again immediately)
+      // await invalidateAllUserTokens(userId.toString());
+    }
+
+    // Always return success for logout (even if token is invalid/expired)
+    // This prevents information leakage about token validity
     res.status(200).json({ message: "Logout successful" });
   } catch (err) {
-    if (err.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: "Invalid token" });
-    }
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ message: "Token expired" });
-    }
-    res.status(500).json({ message: err.message || "Server error" });
+    // Log error but still return success to prevent information leakage
+    console.error('Logout error:', err.message);
+    res.status(200).json({ message: "Logout successful" });
   }
 };
 

@@ -29,6 +29,7 @@ subscriptionSchema.index({ stripePriceId: 1 });
 subscriptionSchema.index({ createdAt: -1 });
 // Compound indexes for common query patterns
 subscriptionSchema.index({ user_id: 1, end_date: -1 });
+subscriptionSchema.index({ user_id: 1, auto_renewal: 1 }); // Recommended index for user subscription queries
 subscriptionSchema.index({ plan_name: 1, end_date: 1 });
 
 module.exports = mongoose.model("Subscription", subscriptionSchema);

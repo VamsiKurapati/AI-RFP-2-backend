@@ -184,24 +184,46 @@ exports.getProfile = async (req, res) => {
             deadlines: deadlines,
             activities: []
         };
-        const Proposals = await Proposal.find({ companyMail: companyProfile.email }).lean();
+        // Parallelize independent queries and use aggregation for counting
+        const [Proposals, GrantProposals, proposalStats] = await Promise.all([
+            Proposal.find({ companyMail: companyProfile.email }).lean(),
+            GrantProposal.find({ companyMail: companyProfile.email }).lean(),
+            Promise.all([
+                Proposal.aggregate([
+                    { $match: { companyMail: companyProfile.email } },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ]),
+                GrantProposal.aggregate([
+                    { $match: { companyMail: companyProfile.email } },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ])
+            ])
+        ]);
+
         const Proposals_1 = Proposals.map(proposal => {
             const { initialProposal, generatedProposal, ...rest } = proposal;
             return rest;
         });
-        const GrantProposals = await GrantProposal.find({ companyMail: companyProfile.email }).lean();
         const GrantProposals_1 = GrantProposals.map(proposal => {
             const { initialProposal, generatedProposal, ...rest } = proposal;
             return rest;
         });
+
+        // Combine stats from both collections
+        const statusCounts = {};
+        proposalStats.flat().forEach(stat => {
+            statusCounts[stat._id] = (statusCounts[stat._id] || 0) + stat.count;
+        });
+
         const totalProposals = Proposals_1.length + GrantProposals_1.length;
-        const wonProposals = Proposals_1.filter(proposal => proposal.status === "Won").length + GrantProposals_1.filter(proposal => proposal.status === "Won").length;
-        const lostProposals = Proposals_1.filter(proposal => proposal.status === "Rejected").length + GrantProposals_1.filter(proposal => proposal.status === "Rejected").length;
+        const wonProposals = statusCounts["Won"] || 0;
+        const lostProposals = statusCounts["Rejected"] || 0;
+        const activeProposals = statusCounts["In Progress"] || 0;
         const successRate = totalProposals === 0 ? "0.00" : ((wonProposals / (wonProposals + lostProposals)) * 100).toFixed(2);
         const data_1 = {
             ...data,
             totalProposals,
-            activeProposals: Proposals_1.filter(proposal => proposal.status === "In Progress").length + GrantProposals_1.filter(proposal => proposal.status === "In Progress").length,
+            activeProposals,
             wonProposals,
             successRate,
             proposals: [...Proposals_1, ...GrantProposals_1],
