@@ -144,23 +144,42 @@ exports.getDashboardData = async (req, res) => {
                 return res.status(404).json({ message: "Company profile not found" });
             }
 
-            const proposals = await Proposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 });
+            // Parallelize independent queries
+            const [proposals, grantProposals] = await Promise.all([
+                Proposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean(),
+                GrantProposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean()
+            ]);
 
-            const grantProposals = await GrantProposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 });
+            // Use aggregation to count proposals by status instead of manual filtering
+            const proposalStats = await Promise.all([
+                Proposal.aggregate([
+                    { $match: { companyMail: companyProfile.email } },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ]),
+                GrantProposal.aggregate([
+                    { $match: { companyMail: companyProfile.email } },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ])
+            ]);
+
+            // Combine stats from both collections
+            const statusCounts = {};
+            proposalStats.flat().forEach(stat => {
+                statusCounts[stat._id] = (statusCounts[stat._id] || 0) + stat.count;
+            });
 
             const totalProposals = proposals.length + grantProposals.length;
-            const inProgressProposals = proposals.filter(proposal => proposal.status === "In Progress").length + grantProposals.filter(proposal => proposal.status === "In Progress").length;
-            const wonProposals = proposals.filter(proposal => proposal.status === "Won").length + grantProposals.filter(proposal => proposal.status === "Won").length;
-            const submittedProposals = proposals.filter(proposal => proposal.status === "Submitted").length + grantProposals.filter(proposal => proposal.status === "Submitted").length;
+            const inProgressProposals = statusCounts["In Progress"] || 0;
+            const wonProposals = statusCounts["Won"] || 0;
+            const submittedProposals = statusCounts["Submitted"] || 0;
 
             const notDeletedProposals = proposals.filter(proposal => !proposal.isDeleted);
 
             const notDeletedGrantProposals = grantProposals.filter(proposal => !proposal.isDeleted);
 
             const deletedProposals = proposals.filter(proposal => proposal.isDeleted).map(proposal => {
-                const proposalObj = proposal.toObject();
                 return {
-                    ...proposalObj,
+                    ...proposal,
                     restoreIn: (() => {
                         if (!proposal.restoreBy) return "No restore date";
 
@@ -184,9 +203,8 @@ exports.getDashboardData = async (req, res) => {
             });
 
             const deletedGrantProposals = grantProposals.filter(proposal => proposal.isDeleted).map(proposal => {
-                const proposalObj = proposal.toObject();
                 return {
-                    ...proposalObj,
+                    ...proposal,
                     restoreIn: (() => {
                         if (!proposal.restoreBy) return "No restore date";
 
@@ -231,13 +249,11 @@ exports.getDashboardData = async (req, res) => {
                 //Remove initial proposal and generated proposal from the proposals
                 proposals: {
                     proposals: notDeletedProposals.map(proposal => {
-                        const proposalObj = proposal.toObject();
-                        const { initialProposal, generatedProposal, ...rest } = proposalObj;
+                        const { initialProposal, generatedProposal, ...rest } = proposal;
                         return rest;
                     }),
                     grantProposals: notDeletedGrantProposals.map(proposal => {
-                        const proposalObj = proposal.toObject();
-                        const { initialProposal, generatedProposal, ...rest } = proposalObj;
+                        const { initialProposal, generatedProposal, ...rest } = proposal;
                         return rest;
                     }),
                 },
@@ -266,21 +282,41 @@ exports.getDashboardData = async (req, res) => {
             if (!companyProfile) {
                 return res.status(404).json({ message: "Company profile not found" });
             }
-            const proposals = await Proposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 });
-            const grantProposals = await GrantProposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 });
+            // Parallelize independent queries
+            const [proposals, grantProposals] = await Promise.all([
+                Proposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean(),
+                GrantProposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean()
+            ]);
+
+            // Use aggregation to count proposals by status instead of manual filtering
+            const proposalStats = await Promise.all([
+                Proposal.aggregate([
+                    { $match: { companyMail: companyProfile.email } },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ]),
+                GrantProposal.aggregate([
+                    { $match: { companyMail: companyProfile.email } },
+                    { $group: { _id: '$status', count: { $sum: 1 } } }
+                ])
+            ]);
+
+            // Combine stats from both collections
+            const statusCounts = {};
+            proposalStats.flat().forEach(stat => {
+                statusCounts[stat._id] = (statusCounts[stat._id] || 0) + stat.count;
+            });
 
             const totalProposals = proposals.length + grantProposals.length;
-            const inProgressProposals = proposals.filter(proposal => proposal.status === "In Progress").length + grantProposals.filter(proposal => proposal.status === "In Progress").length;
-            const wonProposals = proposals.filter(proposal => proposal.status === "Won").length + grantProposals.filter(proposal => proposal.status === "Won").length;
-            const submittedProposals = proposals.filter(proposal => proposal.status === "Submitted").length + grantProposals.filter(proposal => proposal.status === "Submitted").length;
+            const inProgressProposals = statusCounts["In Progress"] || 0;
+            const wonProposals = statusCounts["Won"] || 0;
+            const submittedProposals = statusCounts["Submitted"] || 0;
 
             const notDeletedProposals = proposals.filter(proposal => !proposal.isDeleted);
             const notDeletedGrantProposals = grantProposals.filter(proposal => !proposal.isDeleted);
 
             const deletedProposals = proposals.filter(proposal => proposal.isDeleted).map(proposal => {
-                const proposalObj = proposal.toObject();
                 return {
-                    ...proposalObj,
+                    ...proposal,
                     restoreIn: (() => {
                         if (!proposal.restoreBy) return "No restore date";
 
@@ -304,9 +340,8 @@ exports.getDashboardData = async (req, res) => {
             });
 
             const deletedGrantProposals = grantProposals.filter(proposal => proposal.isDeleted).map(proposal => {
-                const proposalObj = proposal.toObject();
                 return {
-                    ...proposalObj,
+                    ...proposal,
                     restoreIn: (() => {
                         if (!proposal.restoreBy) return "No restore date";
 
@@ -357,13 +392,11 @@ exports.getDashboardData = async (req, res) => {
                 wonProposals,
                 proposals: {
                     proposals: notDeletedProposals.map(proposal => {
-                        const proposalObj = proposal.toObject();
-                        const { initialProposal, generatedProposal, ...rest } = proposalObj;
+                        const { initialProposal, generatedProposal, ...rest } = proposal;
                         return rest;
                     }),
                     grantProposals: notDeletedGrantProposals.map(proposal => {
-                        const proposalObj = proposal.toObject();
-                        const { initialProposal, generatedProposal, ...rest } = proposalObj;
+                        const { initialProposal, generatedProposal, ...rest } = proposal;
                         return rest;
                     }),
                 },
@@ -732,11 +765,11 @@ exports.deletePermanently = async (req, res) => {
 
 exports.deletePermanentlyGrant = async (req, res) => {
     try {
-        const { grantProposalId } = req.body;
-        if (!grantProposalId) {
+        const { proposalId } = req.body;
+        if (!proposalId) {
             return res.status(400).json({ message: "Grant proposal ID is required" });
         }
-        if (!mongoose.Types.ObjectId.isValid(grantProposalId)) {
+        if (!mongoose.Types.ObjectId.isValid(proposalId)) {
             return res.status(400).json({ message: "Invalid ID format" });
         }
 
@@ -745,9 +778,9 @@ exports.deletePermanentlyGrant = async (req, res) => {
         session.startTransaction();
 
         try {
-            await GrantProposal.findByIdAndDelete(grantProposalId, { session });
-            await DraftGrant.deleteOne({ grantProposalId: grantProposalId }, { session });
-            await ProposalTracker.deleteOne({ grantProposalId: grantProposalId }, { session });
+            await GrantProposal.findByIdAndDelete(proposalId, { session });
+            await DraftGrant.deleteOne({ grantProposalId: proposalId }, { session });
+            await ProposalTracker.deleteOne({ grantProposalId: proposalId }, { session });
 
             await session.commitTransaction();
             res.status(200).json({ message: "Grant proposal deleted permanently" });

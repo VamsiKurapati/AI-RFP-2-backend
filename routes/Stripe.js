@@ -5,9 +5,9 @@ const { createPaymentIntent, activateSubscription, handleWebhook, createAddOnChe
 const verifyUser = require('../utils/verifyUser');
 
 // Apply authentication middleware to only create-payment-intent and activate-subscription routes
-router.post('/create-payment-intent', verifyUser(["company"]), createPaymentIntent);
+router.post('/create-checkout-session', verifyUser(["company"]), createPaymentIntent);
 router.post('/activate-subscription', verifyUser(["company"]), activateSubscription);
-router.post('/create-payment-intent-addOn', verifyUser(["company"]), createAddOnCheckoutSession);
+router.post('/create-checkout-session-addOn', verifyUser(["company"]), createAddOnCheckoutSession);
 router.post('/activate-addon-subscription', verifyUser(["company"]), activateAddOnSubscription);
 router.post('/webhook', handleWebhook);
 
