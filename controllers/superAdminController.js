@@ -1221,16 +1221,16 @@ exports.createAddOnPlan = async (req, res) => {
       name: name.trim(),
       description: description || '',
       price: price,
-      type: type,
+      type: "RFP Proposal Generation",
       quantity: quantity,
       popular: popular || false,
-      isActive: true
+      isActive: true,
     });
 
-    res.status(201).json(addOn);
+    res.status(201).json({ message: "Add-on plan created successfully", addOn: addOn });
   } catch (error) {
     console.error('Error in createAddOnPlan:', error);
-    res.status(500).json({ message: "Error creating add-on plan", error: error.message });
+    res.status(500).json({ message: "Error creating add-on plan", error: error.message, addOn: null });
   }
 };
 
@@ -1238,7 +1238,7 @@ exports.createAddOnPlan = async (req, res) => {
 exports.updateAddOnPlan = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, type, quantity, popular, isActive } = req.body;
+    const { name, description, price, quantity, popular, isActive } = req.body;
 
     // Validate ObjectId format
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -1278,7 +1278,6 @@ exports.updateAddOnPlan = async (req, res) => {
     if (name !== undefined) updateData.name = name.trim();
     if (description !== undefined) updateData.description = description || '';
     if (price !== undefined) updateData.price = price;
-    if (type !== undefined) updateData.type = type;
     if (quantity !== undefined) updateData.quantity = quantity;
     if (popular !== undefined) updateData.popular = popular;
     if (isActive !== undefined) updateData.isActive = isActive;
@@ -1289,10 +1288,10 @@ exports.updateAddOnPlan = async (req, res) => {
       { new: true, runValidators: true }
     );
 
-    res.status(200).json(updatedAddOn);
+    res.status(200).json({ message: "Add-on plan updated successfully", updatedAddOn: updatedAddOn });
   } catch (error) {
     console.error('Error in updateAddOnPlan:', error);
-    res.status(500).json({ message: "Error updating add-on plan", error: error.message });
+    res.status(500).json({ message: "Error updating add-on plan", error: error.message, updatedAddOn: null });
   }
 };
 
@@ -1311,15 +1310,16 @@ exports.deleteAddOnPlan = async (req, res) => {
       return res.status(404).json({ message: "Add-on not found" });
     }
 
-    await AddOnPlan.findByIdAndDelete(id);
+    const deletedAddOn = await AddOnPlan.findByIdAndDelete(id);
 
     res.status(200).json({
       message: "Add-on deleted successfully",
-      deletedId: id
+      deletedId: id,
+      deletedAddOn: deletedAddOn
     });
   } catch (error) {
     console.error('Error in deleteAddOnPlan:', error);
-    res.status(500).json({ message: "Error deleting add-on plan", error: error.message });
+    res.status(500).json({ message: "Error deleting add-on plan", error: error.message, deletedAddOn: null });
   }
 };
 
