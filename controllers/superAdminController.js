@@ -504,11 +504,18 @@ exports.updateSubscriptionPlanPrice = async (req, res) => {
       res.json(updatedSubscriptionPlan);
     }
 
-    //if "basic" or "pro" plan is being updated, then update only the price, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations
+    //if "basic" plan is being updated, then update only the price, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, maxMagicBrushUsage
 
-    const { maxEditors, maxViewers } = req.body;
-    if (existingSubscriptionPlan.name === "Basic" || existingSubscriptionPlan.name === "Pro") {
-      const updatedSubscriptionPlan = await SubscriptionPlan.findByIdAndUpdate(id, { monthlyPrice, yearlyPrice, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations }, { new: true });
+    const { maxEditors, maxViewers, maxMagicBrushUsage } = req.body;
+    if (existingSubscriptionPlan.name === "Basic") {
+      const updatedSubscriptionPlan = await SubscriptionPlan.findByIdAndUpdate(id, { monthlyPrice, yearlyPrice, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, maxMagicBrushUsage }, { new: true });
+      res.json(updatedSubscriptionPlan);
+    }
+
+    //if "pro" plan is being updated, then update only the price, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, maxMagicBrushUsage, maxImageGenerationUsage
+    const { maxImageGenerationUsage } = req.body;
+    if (existingSubscriptionPlan.name === "Pro") {
+      const updatedSubscriptionPlan = await SubscriptionPlan.findByIdAndUpdate(id, { monthlyPrice, yearlyPrice, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, maxMagicBrushUsage, maxImageGenerationUsage }, { new: true });
       res.json(updatedSubscriptionPlan);
     }
   } catch (err) {

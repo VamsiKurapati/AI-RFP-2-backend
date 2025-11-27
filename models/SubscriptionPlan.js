@@ -12,6 +12,8 @@ const subscriptionPlanSchema = new mongoose.Schema({
   maxViewers: { type: Number, required: true, min: 0 },
   maxRFPProposalGenerations: { type: Number, required: true, min: 0 },
   maxGrantProposalGenerations: { type: Number, required: true, min: 0 },
+  maxMagicBrushUsage: { type: Number, required: true, min: 0 },
+  maxImageGenerationUsage: { type: Number, required: true, min: 0 },
   description: { type: String, required: true },
   isContact: { type: Boolean, default: false },
 }, { timestamps: true });
