@@ -544,7 +544,9 @@ exports.sendEmail = async (req, res) => {
       maxEditors,
       maxViewers,
       maxRFPProposalGenerations,
-      maxGrantProposalGenerations
+      maxGrantProposalGenerations,
+      maxMagicBrushUsage,
+      maxImageGenerationUsage,
     } = req.body;
 
     const user = await User.findOne({ email });
@@ -572,6 +574,8 @@ exports.sendEmail = async (req, res) => {
         maxViewers,
         maxRFPProposalGenerations,
         maxGrantProposalGenerations,
+        maxMagicBrushUsage,
+        maxImageGenerationUsage,
         status: 'payment_link_generated'  // Track initial status
       });
       await customPlan.save({ session });
@@ -596,6 +600,8 @@ exports.sendEmail = async (req, res) => {
           maxViewers,
           maxRFPProposalGenerations,
           maxGrantProposalGenerations,
+          maxMagicBrushUsage,
+          maxImageGenerationUsage,
           planType
         },
         line_items: [{
@@ -645,6 +651,8 @@ exports.sendEmail = async (req, res) => {
       maxViewers,
       maxRFPProposalGenerations,
       maxGrantProposalGenerations,
+      maxMagicBrushUsage,
+      maxImageGenerationUsage,
       stripeSession.url
     );
 
@@ -739,9 +747,9 @@ exports.getCustomPlanData = async (req, res) => {
 exports.editCustomPlan = async (req, res) => {
   const { id } = req.params;
 
-  const { price, planType, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations } = req.body;
+  const { price, planType, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, maxMagicBrushUsage, maxImageGenerationUsage } = req.body;
 
-  const customPlan = await CustomPlan.findByIdAndUpdate(id, { price, planType, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations }, { new: true });
+  const customPlan = await CustomPlan.findByIdAndUpdate(id, { price, planType, maxEditors, maxViewers, maxRFPProposalGenerations, maxGrantProposalGenerations, maxMagicBrushUsage, maxImageGenerationUsage }, { new: true });
 
   let AdminPaymenyData = {};
 
@@ -774,6 +782,8 @@ exports.editCustomPlan = async (req, res) => {
         <p><strong>Max Viewers:</strong> ${maxViewers || "Not specified"}</p>
         <p><strong>Max RFP Proposal Generations:</strong> ${maxRFPProposalGenerations || "Not specified"}</p>
         <p><strong>Max Grant Proposal Generations:</strong> ${maxGrantProposalGenerations || "Not specified"}</p>
+        <p><strong>Max Magic Brush Usage:</strong> ${maxMagicBrushUsage || "Not specified"}</p>
+        <p><strong>Max Image Generation Usage:</strong> ${maxImageGenerationUsage || "Not specified"}</p>
         <hr />
 
         <h2 style="color: #2563EB;">Payment Details:</h2>
@@ -837,6 +847,8 @@ exports.createCustomPlan = async (req, res) => {
       maxViewers,
       maxRFPProposalGenerations,
       maxGrantProposalGenerations,
+      maxMagicBrushUsage,
+      maxImageGenerationUsage,
       transaction_id,
       companyName,
       payment_method,
@@ -877,6 +889,8 @@ exports.createCustomPlan = async (req, res) => {
         max_viewers: maxViewers,
         max_rfp_proposal_generations: maxRFPProposalGenerations,
         max_grant_proposal_generations: maxGrantProposalGenerations,
+        max_magic_brush_usage: maxMagicBrushUsage,
+        max_image_generation_usage: maxImageGenerationUsage,
         auto_renewal: false,
       }], { session });
 

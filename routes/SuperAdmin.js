@@ -52,34 +52,41 @@ router.post('/addAdminMessage/:id', verifyUser(["SuperAdmin"]), addAdminMessage)
 router.get('/getSubscriptionPlansData', verifyUser(["SuperAdmin"]), getSubscriptionPlansData);
 router.put('/updateSubscriptionPlanPrice/:id', verifyUser(["SuperAdmin"]), updateSubscriptionPlanPrice);
 router.put('/updateSubscriptionPlanIsContact/:id', verifyUser(["SuperAdmin"]), updateSubscriptionPlanIsContact);
-router.post('/updateSubscriptionPlanCustom', verifyUser(["SuperAdmin"]), sendEmail);
 
 
 //payment
 router.get('/getPaymentStatsAndData', verifyUser(["SuperAdmin"]), getPaymentsSummaryAndData);
 
+
 //custom plan
 router.get('/getCustomPlanData', verifyUser(["SuperAdmin"]), getCustomPlanData);
 router.delete('/deleteCustomPlan/:id', verifyUser(["SuperAdmin"]), deleteCustomPlan);
 router.put('/editCustomPlan/:id', verifyUser(["SuperAdmin"]), editCustomPlan);
-
+//To send the email to the user after creating the custom plan
+router.post('/updateSubscriptionPlanCustom', verifyUser(["SuperAdmin"]), sendEmail);
+//To update the custom plan after creating it with the transaction id
 router.post('/createCustomPlan', verifyUser(["SuperAdmin"]), createCustomPlan);
+
 
 //payment details
 router.get('/getPaymentDetails', verifyUser(["SuperAdmin"]), getPaymentDetails);
 router.put('/editPaymentDetails/:id', verifyUser(["SuperAdmin"]), editPaymentDetails);
+
 
 //contact
 router.get('/getContactData', verifyUser(["SuperAdmin"]), getContactData);
 router.delete('/deleteContactData/:id', verifyUser(["SuperAdmin"]), deleteContactData);
 router.put('/updateContactData/:id', verifyUser(["SuperAdmin"]), updateContactData);
 
+
 //Price Sync Route (for Super Admin use - can add admin verification if needed)
 router.post('/sync-prices', verifyUser(["SuperAdmin"]), syncPricesFromStripe);
+
 
 //email content
 router.put('/updateEmailContentinDB/:id', verifyUser(["SuperAdmin"]), updateEmailContentinDB);
 router.get('/getEmailContentFromDB', verifyUser(["SuperAdmin"]), getEmailContentFromDB);
+
 
 //subscriptions
 router.get('/getSubscriptionsOfAllUsers', verifyUser(["SuperAdmin"]), getSubscriptionsOfAllUsers);
@@ -88,10 +95,12 @@ router.post('/assignSubscription', verifyUser(["SuperAdmin"]), assignNewSubscrip
 router.post('/updateUserSubscription', verifyUser(["SuperAdmin"]), updateUserSubscription);
 router.post('/bulkDeactivateSubscriptions', verifyUser(["SuperAdmin"]), bulkDeactivateSubscriptions);
 
+
 // Add-on plans routes
 router.post('/createAddOnPlan', verifyUser(["SuperAdmin"]), createAddOnPlan);
 router.put('/updateAddOnPlan/:id', verifyUser(["SuperAdmin"]), updateAddOnPlan);
 router.delete('/deleteAddOnPlan/:id', verifyUser(["SuperAdmin"]), deleteAddOnPlan);
+
 
 //send custom email
 router.post('/sendCustomEmail', verifyUser(["SuperAdmin"]), sendCustomEmail);

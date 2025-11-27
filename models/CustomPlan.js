@@ -9,6 +9,8 @@ const customPlanSchema = new mongoose.Schema({
   maxViewers: { type: Number, required: true },
   maxRFPProposalGenerations: { type: Number, required: true },
   maxGrantProposalGenerations: { type: Number, required: true },
+  maxMagicBrushUsage: { type: Number, required: true },
+  maxImageGenerationUsage: { type: Number, required: true },
   status: { type: String, required: true, enum: ['payment_link_generated', 'paid', 'failed'] },  // Controlled values
   stripeCheckoutSessionId: { type: String },  // Save the session ID
   checkoutUrl: { type: String },              // Save the session URL

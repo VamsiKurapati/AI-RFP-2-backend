@@ -980,8 +980,12 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
                 max_viewers: plan.maxViewers,
                 max_rfp_proposal_generations: plan.maxRFPProposalGenerations,
                 max_grant_proposal_generations: plan.maxGrantProposalGenerations,
+                max_magic_brush_usage: plan.maxMagicBrushUsage,
+                max_image_generation_usage: plan.maxImageGenerationUsage,
                 current_rfp_proposal_generations: 0,
                 current_grant_proposal_generations: 0,
+                current_magic_brush_usage: 0,
+                current_image_generation_usage: 0,
                 auto_renewal: true,
                 stripeSubscriptionId: stripeSub.id,
                 stripePriceId: priceId,
@@ -1261,6 +1265,8 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
                 max_viewers: customPlan.maxViewers,
                 max_rfp_proposal_generations: customPlan.maxRFPProposalGenerations,
                 max_grant_proposal_generations: customPlan.maxGrantProposalGenerations,
+                max_magic_brush_usage: customPlan.maxMagicBrushUsage,
+                max_image_generation_usage: customPlan.maxImageGenerationUsage,
                 auto_renewal: false,
                 stripeSubscriptionId: sessionObj.payment_intent || null,
                 stripePriceId: sessionObj.metadata.planPriceId || null,
@@ -1309,7 +1315,9 @@ const handleEnterpriseCheckoutSessionCompleted = async (sessionObj) => {
             customPlan.maxEditors,
             customPlan.maxViewers,
             customPlan.maxRFPProposalGenerations,
-            customPlan.maxGrantProposalGenerations
+            customPlan.maxGrantProposalGenerations,
+            customPlan.maxMagicBrushUsage,
+            customPlan.maxImageGenerationUsage,
         );
         queueEmail(user.email, subject, body, 'enterprisePaymentSuccess');
     } catch (err) {
