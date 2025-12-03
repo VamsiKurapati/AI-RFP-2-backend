@@ -146,8 +146,8 @@ exports.getDashboardData = async (req, res) => {
 
             // Parallelize independent queries
             const [proposals, grantProposals] = await Promise.all([
-                Proposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean(),
-                GrantProposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean()
+                Proposal.find({ companyMail: companyProfile.email }).populate('collaborators.editors', 'fullName email').populate('collaborators.viewers', 'fullName email').sort({ createdAt: -1 }).lean(),
+                GrantProposal.find({ companyMail: companyProfile.email }).populate('collaborators.editors', 'fullName email').populate('collaborators.viewers', 'fullName email').sort({ createdAt: -1 }).lean()
             ]);
 
             // Use aggregation to count proposals by status instead of manual filtering
@@ -248,14 +248,84 @@ exports.getDashboardData = async (req, res) => {
 
                 //Remove initial proposal and generated proposal from the proposals
                 proposals: {
-                    proposals: notDeletedProposals.map(proposal => {
+                    proposals: await Promise.all(notDeletedProposals.map(async (proposal) => {
                         const { initialProposal, generatedProposal, ...rest } = proposal;
-                        return rest;
-                    }),
-                    grantProposals: notDeletedGrantProposals.map(proposal => {
+                        // Map User IDs to EmployeeProfile IDs
+                        const editorUserIds = (rest.collaborators?.editors || []).map(editor =>
+                            typeof editor === 'object' && editor._id ? editor._id.toString() : editor.toString()
+                        );
+                        const viewerUserIds = (rest.collaborators?.viewers || []).map(viewer =>
+                            typeof viewer === 'object' && viewer._id ? viewer._id.toString() : viewer.toString()
+                        );
+
+                        const allUserIds = [...editorUserIds, ...viewerUserIds];
+                        const employeeProfiles = await EmployeeProfile.find({
+                            userId: { $in: allUserIds },
+                            companyMail: companyProfile.email
+                        });
+
+                        // Create a map of userId -> employeeProfile
+                        const userIdToEmployeeMap = new Map();
+                        employeeProfiles.forEach(emp => {
+                            const employee = companyProfile.employees.find(e =>
+                                e.employeeId && e.employeeId.toString() === emp._id.toString()
+                            );
+                            if (employee) {
+                                userIdToEmployeeMap.set(emp.userId.toString(), {
+                                    _id: emp._id.toString(), // EmployeeProfile._id (employeeId)
+                                    fullName: emp.name || employee.name || '',
+                                    email: emp.email || employee.email || ''
+                                });
+                            }
+                        });
+
+                        // Combine editors and viewers into a single collaborators array
+                        const collaborators = [
+                            ...editorUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean),
+                            ...viewerUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean)
+                        ];
+
+                        return { ...rest, collaborators };
+                    })),
+                    grantProposals: await Promise.all(notDeletedGrantProposals.map(async (proposal) => {
                         const { initialProposal, generatedProposal, ...rest } = proposal;
-                        return rest;
-                    }),
+                        // Map User IDs to EmployeeProfile IDs
+                        const editorUserIds = (rest.collaborators?.editors || []).map(editor =>
+                            typeof editor === 'object' && editor._id ? editor._id.toString() : editor.toString()
+                        );
+                        const viewerUserIds = (rest.collaborators?.viewers || []).map(viewer =>
+                            typeof viewer === 'object' && viewer._id ? viewer._id.toString() : viewer.toString()
+                        );
+
+                        const allUserIds = [...editorUserIds, ...viewerUserIds];
+                        const employeeProfiles = await EmployeeProfile.find({
+                            userId: { $in: allUserIds },
+                            companyMail: companyProfile.email
+                        });
+
+                        // Create a map of userId -> employeeProfile
+                        const userIdToEmployeeMap = new Map();
+                        employeeProfiles.forEach(emp => {
+                            const employee = companyProfile.employees.find(e =>
+                                e.employeeId && e.employeeId.toString() === emp._id.toString()
+                            );
+                            if (employee) {
+                                userIdToEmployeeMap.set(emp.userId.toString(), {
+                                    _id: emp._id.toString(), // EmployeeProfile._id (employeeId)
+                                    fullName: emp.name || employee.name || '',
+                                    email: emp.email || employee.email || ''
+                                });
+                            }
+                        });
+
+                        // Combine editors and viewers into a single collaborators array
+                        const collaborators = [
+                            ...editorUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean),
+                            ...viewerUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean)
+                        ];
+
+                        return { ...rest, collaborators };
+                    })),
                 },
                 deletedProposals: {
                     proposals: deletedProposals.map(proposal => {
@@ -284,8 +354,8 @@ exports.getDashboardData = async (req, res) => {
             }
             // Parallelize independent queries
             const [proposals, grantProposals] = await Promise.all([
-                Proposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean(),
-                GrantProposal.find({ companyMail: companyProfile.email }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean()
+                Proposal.find({ companyMail: companyProfile.email }).populate('collaborators.editors', 'fullName email').populate('collaborators.viewers', 'fullName email').sort({ createdAt: -1 }).lean(),
+                GrantProposal.find({ companyMail: companyProfile.email }).populate('collaborators.editors', 'fullName email').populate('collaborators.viewers', 'fullName email').sort({ createdAt: -1 }).lean()
             ]);
 
             // Use aggregation to count proposals by status instead of manual filtering
@@ -391,14 +461,84 @@ exports.getDashboardData = async (req, res) => {
                 submittedProposals,
                 wonProposals,
                 proposals: {
-                    proposals: notDeletedProposals.map(proposal => {
+                    proposals: await Promise.all(notDeletedProposals.map(async (proposal) => {
                         const { initialProposal, generatedProposal, ...rest } = proposal;
-                        return rest;
-                    }),
-                    grantProposals: notDeletedGrantProposals.map(proposal => {
+                        // Map User IDs to EmployeeProfile IDs
+                        const editorUserIds = (rest.collaborators?.editors || []).map(editor =>
+                            typeof editor === 'object' && editor._id ? editor._id.toString() : editor.toString()
+                        );
+                        const viewerUserIds = (rest.collaborators?.viewers || []).map(viewer =>
+                            typeof viewer === 'object' && viewer._id ? viewer._id.toString() : viewer.toString()
+                        );
+
+                        const allUserIds = [...editorUserIds, ...viewerUserIds];
+                        const employeeProfiles = await EmployeeProfile.find({
+                            userId: { $in: allUserIds },
+                            companyMail: companyProfile.email
+                        });
+
+                        // Create a map of userId -> employeeProfile
+                        const userIdToEmployeeMap = new Map();
+                        employeeProfiles.forEach(emp => {
+                            const employee = companyProfile.employees.find(e =>
+                                e.employeeId && e.employeeId.toString() === emp._id.toString()
+                            );
+                            if (employee) {
+                                userIdToEmployeeMap.set(emp.userId.toString(), {
+                                    _id: emp._id.toString(), // EmployeeProfile._id (employeeId)
+                                    fullName: emp.name || employee.name || '',
+                                    email: emp.email || employee.email || ''
+                                });
+                            }
+                        });
+
+                        // Combine editors and viewers into a single collaborators array
+                        const collaborators = [
+                            ...editorUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean),
+                            ...viewerUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean)
+                        ];
+
+                        return { ...rest, collaborators };
+                    })),
+                    grantProposals: await Promise.all(notDeletedGrantProposals.map(async (proposal) => {
                         const { initialProposal, generatedProposal, ...rest } = proposal;
-                        return rest;
-                    }),
+                        // Map User IDs to EmployeeProfile IDs
+                        const editorUserIds = (rest.collaborators?.editors || []).map(editor =>
+                            typeof editor === 'object' && editor._id ? editor._id.toString() : editor.toString()
+                        );
+                        const viewerUserIds = (rest.collaborators?.viewers || []).map(viewer =>
+                            typeof viewer === 'object' && viewer._id ? viewer._id.toString() : viewer.toString()
+                        );
+
+                        const allUserIds = [...editorUserIds, ...viewerUserIds];
+                        const employeeProfiles = await EmployeeProfile.find({
+                            userId: { $in: allUserIds },
+                            companyMail: companyProfile.email
+                        });
+
+                        // Create a map of userId -> employeeProfile
+                        const userIdToEmployeeMap = new Map();
+                        employeeProfiles.forEach(emp => {
+                            const employee = companyProfile.employees.find(e =>
+                                e.employeeId && e.employeeId.toString() === emp._id.toString()
+                            );
+                            if (employee) {
+                                userIdToEmployeeMap.set(emp.userId.toString(), {
+                                    _id: emp._id.toString(), // EmployeeProfile._id (employeeId)
+                                    fullName: emp.name || employee.name || '',
+                                    email: emp.email || employee.email || ''
+                                });
+                            }
+                        });
+
+                        // Combine editors and viewers into a single collaborators array
+                        const collaborators = [
+                            ...editorUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean),
+                            ...viewerUserIds.map(userId => userIdToEmployeeMap.get(userId)).filter(Boolean)
+                        ];
+
+                        return { ...rest, collaborators };
+                    })),
                 },
                 deletedProposals: {
                     proposals: deletedProposals.map(proposal => {
@@ -520,106 +660,231 @@ exports.addCalendarEvent = async (req, res) => {
     }
 };
 
-exports.setCurrentEditor = async (req, res) => {
-    try {
-        const { proposalId, editorId } = req.body;
+// exports.addCollaboratorToProposal = async (req, res) => {
+//     try {
+//         const role = req.user.role;
 
-        // Input validation
-        if (!proposalId || !editorId) {
-            return res.status(400).json({ message: "Proposal ID and Editor ID are required" });
-        }
+//         if (role !== "company") {
+//             return res.status(403).json({ message: "You are not authorized to add a collaborator to a proposal" });
+//         }
 
-        // Validate ObjectId format
-        if (!mongoose.Types.ObjectId.isValid(proposalId) || !mongoose.Types.ObjectId.isValid(editorId)) {
-            return res.status(400).json({ message: "Invalid ID format" });
-        }
+//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
+//         if (!mongoose.Types.ObjectId.isValid(proposalId)) {
+//             return res.status(400).json({ message: "Invalid ID format" });
+//         }
+//         if (!collaboratorEmail) {
+//             return res.status(400).json({ message: "Collaborator email is required" });
+//         }
 
-        const editor = await EmployeeProfile.findById(editorId);
-        if (!editor || editor.accessLevel !== "Editor") {
-            return res.status(404).json({ message: "Editor not found or member is not an editor" });
-        }
+//         const proposal = await Proposal.findById(proposalId);
+//         if (!proposal) {
+//             return res.status(404).json({ message: "Proposal not found" });
+//         }
 
-        const userId = editor.userId;
+//         //Check if we have enough space for the new collaborator
+//         if (collaboratorType === "editor" && proposal.collaborators.editors.length >= proposal.maxEditors) {
+//             return res.status(404).json({ message: "Max editors reached" });
+//         }
+//         if (collaboratorType === "viewer" && proposal.collaborators.viewers.length >= proposal.maxViewers) {
+//             return res.status(404).json({ message: "Max viewers reached" });
+//         }
 
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
+//         const user = await User.findOne({ email: collaboratorEmail });
+//         const employeeProfile = await EmployeeProfile.findOne({ email: collaboratorEmail });
 
-        const proposal = await Proposal.findById(proposalId).populate("currentEditor", "_id");
-        if (!proposal) {
-            return res.status(404).json({ message: "Proposal not found" });
-        }
+//         if (!user && !employeeProfile) {
+//             return res.status(404).json({ message: "User or employee profile not found" });
+//         }
 
-        // const req_user = await User.findOne({ email: proposal.companyMail });
+//         if (collaboratorType === "editor") {
+//             //Check if employee is having editor access or not
+//             if (employeeProfile && employeeProfile.accessLevel !== "Editor") {
+//                 return res.status(404).json({ message: "Employee is not an editor" });
+//             }
 
-        // If company and email is not the same as the proposal, return error
-        if (req.user.role === "company" && req.user.email !== proposal.companyMail) {
-            return res.status(403).json({ message: "You are not authorized to set the current editor" });
-        }
+//             proposal.collaborators.editors.push(user._id);
 
-        //Only company and the the current editor can set the current editor
-        if (req.user.role !== "company" && proposal.currentEditor._id !== req.user._id) {
-            return res.status(403).json({ message: "You are not authorized to set the current editor" });
-        }
+//         } else if (collaboratorType === "viewer") {
+//             //Check if employee is having viewer access or not
+//             if (employeeProfile && employeeProfile.accessLevel !== "Viewer") {
+//                 return res.status(404).json({ message: "Employee is not a viewer" });
+//             }
 
-        proposal.currentEditor = userId;
-        await proposal.save();
+//             proposal.collaborators.viewers.push(user._id);
+//         } else {
+//             return res.status(400).json({ message: "Invalid collaborator type" });
+//         }
 
-        res.status(200).json({ message: "Editor set successfully" });
-    } catch (error) {
-        console.error('Proposal editor set error:', error);
-        res.status(500).json({ message: error.message || "Server error" });
-    }
-};
+//         await proposal.save();
 
-exports.setCurrentEditorGrant = async (req, res) => {
-    try {
-        const { grantProposalId, editorId } = req.body;
-        if (!grantProposalId || !editorId) {
-            return res.status(400).json({ message: "Grant proposal ID and editor ID are required" });
-        }
+//         await sendProposalCollaboratorAddedEmail(proposal, user);
 
-        // Validate ObjectId format
-        if (!mongoose.Types.ObjectId.isValid(grantProposalId) || !mongoose.Types.ObjectId.isValid(editorId)) {
-            return res.status(400).json({ message: "Invalid ID format" });
-        }
+//         res.status(200).json({ message: "Collaborator added to proposal successfully" });
+//     }
+//     catch (error) {
+//         console.error('Collaborator addition to proposal error:', error);
+//         res.status(500).json({ message: error.message || "Server error" });
+//     }
+// };
 
-        const editor = await EmployeeProfile.findById(editorId);
-        if (!editor || editor.accessLevel !== "Editor") {
-            return res.status(404).json({ message: "Editor not found or member is not an editor" });
-        }
+// exports.removeCollaboratorFromProposal = async (req, res) => {
+//     try {
+//         const role = req.user.role;
+//         if (role !== "company") {
+//             return res.status(403).json({ message: "You are not authorized to remove a collaborator from a proposal" });
+//         }
 
-        const userId = editor.userId;
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
+//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
+//         if (!mongoose.Types.ObjectId.isValid(proposalId) || !collaboratorEmail || !collaboratorType) {
+//             return res.status(400).json({ message: "Invalid ID format or collaborator email or collaborator type" });
+//         }
 
-        const grantProposal = await GrantProposal.findById(grantProposalId).populate("currentEditor", "_id");
-        if (!grantProposal) {
-            return res.status(404).json({ message: "Grant proposal not found" });
-        }
+//         const proposal = await Proposal.findById(proposalId);
+//         if (!proposal) {
+//             return res.status(404).json({ message: "Proposal not found" });
+//         }
 
-        //If company and email is not the same as the proposal, return error
-        if (req.user.role === "company" && req.user.email !== grantProposal.companyMail) {
-            return res.status(403).json({ message: "You are not authorized to set the current editor" });
-        }
+//         //Check if the collaborator is a editor or viewer
+//         if (collaboratorType === "editor") {
+//             //Check if the collaborator is an editor
+//             if (!proposal.collaborators.editors.includes(collaboratorEmail)) {
+//                 return res.status(404).json({ message: "Collaborator is not an editor" });
+//             }
+//             proposal.collaborators.editors = proposal.collaborators.editors.filter(editor => editor.toString() !== collaboratorEmail);
+//         } else if (collaboratorType === "viewer") {
+//             //Check if the collaborator is a viewer
+//             if (!proposal.collaborators.viewers.includes(collaboratorEmail)) {
+//                 return res.status(404).json({ message: "Collaborator is not a viewer" });
+//             }
+//             proposal.collaborators.viewers = proposal.collaborators.viewers.filter(viewer => viewer.toString() !== collaboratorEmail);
+//         } else {
+//             return res.status(400).json({ message: "Invalid collaborator type" });
+//         }
 
-        //If company and email is not the same as the proposal, return error
-        if (req.user.role !== "company" && req.user._id !== grantProposal.currentEditor._id) {
-            return res.status(403).json({ message: "You are not authorized to set the current editor" });
-        }
+//         await proposal.save();
 
-        grantProposal.currentEditor = user._id;
-        await grantProposal.save();
+//         await sendProposalCollaboratorRemovedEmail(proposal, collaboratorEmail);
 
-        res.status(200).json({ message: "Editor set successfully" });
-    } catch (error) {
-        console.error('Grant proposal editor set error:', error);
-        res.status(500).json({ message: error.message || "Server error" });
-    }
-};
+//         res.status(200).json({ message: "Collaborator removed from proposal successfully" });
+//     }
+//     catch (error) {
+//         console.error('Collaborator removal from proposal error:', error);
+//         res.status(500).json({ message: error.message || "Server error" });
+//     }
+// };
+
+// exports.addCollaboratorToGrantProposal = async (req, res) => {
+//     try {
+//         const role = req.user.role;
+
+//         if (role !== "company") {
+//             return res.status(403).json({ message: "You are not authorized to add a collaborator to a proposal" });
+//         }
+
+//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
+//         if (!mongoose.Types.ObjectId.isValid(proposalId)) {
+//             return res.status(400).json({ message: "Invalid ID format" });
+//         }
+//         if (!collaboratorEmail) {
+//             return res.status(400).json({ message: "Collaborator email is required" });
+//         }
+
+//         const grantProposal = await GrantProposal.findById(proposalId);
+//         if (!grantProposal) {
+//             return res.status(404).json({ message: "Grant proposal not found" });
+//         }
+
+//         //Check if we have enough space for the new collaborator
+//         if (collaboratorType === "editor" && grantProposal.collaborators.editors.length >= grantProposal.maxEditors) {
+//             return res.status(404).json({ message: "Max editors reached" });
+//         }
+//         if (collaboratorType === "viewer" && grantProposal.collaborators.viewers.length >= grantProposal.maxViewers) {
+//             return res.status(404).json({ message: "Max viewers reached" });
+//         }
+
+//         const user = await User.findOne({ email: collaboratorEmail });
+//         const employeeProfile = await EmployeeProfile.findOne({ email: collaboratorEmail });
+
+//         if (!user && !employeeProfile) {
+//             return res.status(404).json({ message: "User or employee profile not found" });
+//         }
+
+//         if (collaboratorType === "editor") {
+//             //Check if employee is having editor access or not
+//             if (employeeProfile && employeeProfile.accessLevel !== "Editor") {
+//                 return res.status(404).json({ message: "Employee is not an editor" });
+//             }
+
+//             grantProposal.collaborators.editors.push(user._id);
+
+//         } else if (collaboratorType === "viewer") {
+//             //Check if employee is having viewer access or not
+//             if (employeeProfile && employeeProfile.accessLevel !== "Viewer") {
+//                 return res.status(404).json({ message: "Employee is not a viewer" });
+//             }
+
+//             grantProposal.collaborators.viewers.push(user._id);
+//         } else {
+//             return res.status(400).json({ message: "Invalid collaborator type" });
+//         }
+
+//         await grantProposal.save();
+
+//         await sendGrantProposalCollaboratorAddedEmail(grantProposal, user);
+
+//         res.status(200).json({ message: "Collaborator added to grant proposal successfully" });
+//     }
+//     catch (error) {
+//         console.error('Collaborator addition to grant proposal error:', error);
+//         res.status(500).json({ message: error.message || "Server error" });
+//     }
+// };
+
+// exports.removeCollaboratorFromGrantProposal = async (req, res) => {
+//     try {
+//         const role = req.user.role;
+//         if (role !== "company") {
+//             return res.status(403).json({ message: "You are not authorized to remove a collaborator from a proposal" });
+//         }
+
+//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
+//         if (!mongoose.Types.ObjectId.isValid(proposalId) || !collaboratorEmail || !collaboratorType) {
+//             return res.status(400).json({ message: "Invalid ID format or collaborator email or collaborator type" });
+//         }
+
+//         const grantProposal = await GrantProposal.findById(proposalId);
+//         if (!grantProposal) {
+//             return res.status(404).json({ message: "Grant proposal not found" });
+//         }
+
+//         //Check if the collaborator is a editor or viewer
+//         if (collaboratorType === "editor") {
+//             //Check if the collaborator is an editor
+//             if (!grantProposal.collaborators.editors.includes(collaboratorEmail)) {
+//                 return res.status(404).json({ message: "Collaborator is not an editor" });
+//             }
+//             grantProposal.collaborators.editors = grantProposal.collaborators.editors.filter(editor => editor.toString() !== collaboratorEmail);
+//         } else if (collaboratorType === "viewer") {
+//             //Check if the collaborator is a viewer
+//             if (!grantProposal.collaborators.viewers.includes(collaboratorEmail)) {
+//                 return res.status(404).json({ message: "Collaborator is not a viewer" });
+//             }
+//             grantProposal.collaborators.viewers = grantProposal.collaborators.viewers.filter(viewer => viewer.toString() !== collaboratorEmail);
+//         } else {
+//             return res.status(400).json({ message: "Invalid collaborator type" });
+//         }
+
+//         await grantProposal.save();
+
+//         await sendGrantProposalCollaboratorRemovedEmail(grantProposal, collaboratorEmail);
+
+//         res.status(200).json({ message: "Collaborator removed from grant proposal successfully" });
+//     }
+//     catch (error) {
+//         console.error('Collaborator removal from grant proposal error:', error);
+//         res.status(500).json({ message: error.message || "Server error" });
+//     }
+// };
 
 exports.restoreProposal = async (req, res) => {
     try {
@@ -802,7 +1067,7 @@ exports.updateProposal = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(proposalId)) {
             return res.status(400).json({ message: "Invalid ID format" });
         }
-        const proposal = await Proposal.findById(proposalId).populate("currentEditor", "_id");
+        const proposal = await Proposal.findById(proposalId);
         if (!proposal) {
             return res.status(404).json({ message: "Proposal not found" });
         }
@@ -817,8 +1082,10 @@ exports.updateProposal = async (req, res) => {
             return res.status(403).json({ message: "You are not authorized to update the proposal" });
         }
 
-        //Only company and the the current editor can update the proposal
-        if (user.role !== "company" && proposal.currentEditor._id !== user._id) {
+        //Only company and collaborators can update the proposal
+        const isCollaborator = proposal.collaborators.editors.some(editorId => editorId.toString() === user._id.toString()) ||
+            proposal.collaborators.viewers.some(viewerId => viewerId.toString() === user._id.toString());
+        if (user.role !== "company" && !isCollaborator) {
             return res.status(403).json({ message: "You are not authorized to update the proposal" });
         }
 
@@ -874,7 +1141,7 @@ exports.updateGrantProposal = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(grantProposalId)) {
             return res.status(400).json({ message: "Invalid ID format" });
         }
-        const grantProposal = await GrantProposal.findById(grantProposalId).populate("currentEditor", "_id");
+        const grantProposal = await GrantProposal.findById(grantProposalId);
         if (!grantProposal) {
             return res.status(404).json({ message: "Grant proposal not found" });
         }
@@ -889,8 +1156,10 @@ exports.updateGrantProposal = async (req, res) => {
             return res.status(403).json({ message: "You are not authorized to update the grant proposal" });
         }
 
-        //Only company and the the current editor can update the grant proposal
-        if (user.role !== "company" && grantProposal.currentEditor._id !== user._id) {
+        //Only company and collaborators can update the grant proposal
+        const isCollaborator = grantProposal.collaborators.editors.some(editorId => editorId.toString() === user._id.toString()) ||
+            grantProposal.collaborators.viewers.some(viewerId => viewerId.toString() === user._id.toString());
+        if (user.role !== "company" && !isCollaborator) {
             return res.status(403).json({ message: "You are not authorized to update the grant proposal" });
         }
 
@@ -930,6 +1199,174 @@ exports.updateGrantProposal = async (req, res) => {
         }
     } catch (error) {
         console.error('Grant proposal update error:', error);
+        res.status(500).json({ message: error.message || "Server error" });
+    }
+};
+
+exports.setCollaborators = async (req, res) => {
+    try {
+        const { proposalId, collaboratorIds } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(proposalId)) {
+            return res.status(400).json({ message: "Invalid proposal ID format" });
+        }
+
+        if (!Array.isArray(collaboratorIds)) {
+            return res.status(400).json({ message: "Collaborator IDs must be an array" });
+        }
+
+        // Validate all collaborator IDs
+        for (const collaboratorId of collaboratorIds) {
+            if (!mongoose.Types.ObjectId.isValid(collaboratorId)) {
+                return res.status(400).json({ message: `Invalid collaborator ID format: ${collaboratorId}` });
+            }
+        }
+
+        const user = await User.findById(req.user._id);
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Only company role can set collaborators
+        if (user.role !== "company") {
+            return res.status(403).json({ message: "You are not authorized to set collaborators" });
+        }
+
+        const proposal = await Proposal.findById(proposalId);
+        if (!proposal) {
+            return res.status(404).json({ message: "Proposal not found" });
+        }
+
+        // Verify company owns this proposal
+        if (user.email !== proposal.companyMail) {
+            return res.status(403).json({ message: "You are not authorized to set collaborators for this proposal" });
+        }
+
+        // Verify all collaborator IDs exist and are employees of the company
+        const companyProfile = await CompanyProfile.findOne({ email: proposal.companyMail });
+        if (!companyProfile) {
+            return res.status(404).json({ message: "Company profile not found" });
+        }
+
+        const employeeIds = companyProfile.employees.map(emp => emp.employeeId?.toString()).filter(Boolean);
+        const invalidCollaborators = collaboratorIds.filter(id => !employeeIds.includes(id.toString()));
+
+        if (invalidCollaborators.length > 0) {
+            return res.status(400).json({ message: `Invalid collaborator IDs: ${invalidCollaborators.join(', ')}` });
+        }
+
+        // Convert employeeIds (EmployeeProfile._id) to userIds (User._id)
+        const employeeProfiles = await EmployeeProfile.find({ _id: { $in: collaboratorIds } });
+        const userIds = employeeProfiles.map(emp => emp.userId).filter(Boolean);
+
+        if (userIds.length !== collaboratorIds.length) {
+            return res.status(400).json({ message: "Some collaborator IDs could not be mapped to users" });
+        }
+
+        const editorIds = employeeProfiles.filter(emp => emp.accessLevel === "Editor").map(emp => emp.userId);
+        const viewerIds = employeeProfiles.filter(emp => emp.accessLevel === "Viewer").map(emp => emp.userId);
+
+        if (editorIds.length > 0 && editorIds.length > proposal.maxEditors) {
+            return res.status(400).json({ message: "Max editors reached" });
+        }
+
+        if (viewerIds.length > 0 && viewerIds.length > proposal.maxViewers) {
+            return res.status(400).json({ message: "Max viewers reached" });
+        }
+
+        // Update collaborators - store all as editors for simplicity
+        proposal.collaborators.editors = editorIds;
+        proposal.collaborators.viewers = viewerIds;
+
+        await proposal.save();
+
+        res.status(200).json({ message: "Collaborators updated successfully", proposal });
+    } catch (error) {
+        console.error('Set collaborators error:', error);
+        res.status(500).json({ message: error.message || "Server error" });
+    }
+};
+
+exports.setGrantCollaborators = async (req, res) => {
+    try {
+        const { grantProposalId, collaboratorIds } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(grantProposalId)) {
+            return res.status(400).json({ message: "Invalid grant proposal ID format" });
+        }
+
+        if (!Array.isArray(collaboratorIds)) {
+            return res.status(400).json({ message: "Collaborator IDs must be an array" });
+        }
+
+        // Validate all collaborator IDs
+        for (const collaboratorId of collaboratorIds) {
+            if (!mongoose.Types.ObjectId.isValid(collaboratorId)) {
+                return res.status(400).json({ message: `Invalid collaborator ID format: ${collaboratorId}` });
+            }
+        }
+
+        const user = await User.findById(req.user._id);
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Only company role can set collaborators
+        if (user.role !== "company") {
+            return res.status(403).json({ message: "You are not authorized to set collaborators" });
+        }
+
+        const grantProposal = await GrantProposal.findById(grantProposalId);
+        if (!grantProposal) {
+            return res.status(404).json({ message: "Grant proposal not found" });
+        }
+
+        // Verify company owns this grant proposal
+        if (user.email !== grantProposal.companyMail) {
+            return res.status(403).json({ message: "You are not authorized to set collaborators for this grant proposal" });
+        }
+
+        // Verify all collaborator IDs exist and are employees of the company
+        const companyProfile = await CompanyProfile.findOne({ email: grantProposal.companyMail });
+        if (!companyProfile) {
+            return res.status(404).json({ message: "Company profile not found" });
+        }
+
+        const employeeIds = companyProfile.employees.map(emp => emp.employeeId?.toString()).filter(Boolean);
+        const invalidCollaborators = collaboratorIds.filter(id => !employeeIds.includes(id.toString()));
+
+        if (invalidCollaborators.length > 0) {
+            return res.status(400).json({ message: `Invalid collaborator IDs: ${invalidCollaborators.join(', ')}` });
+        }
+
+        // Convert employeeIds (EmployeeProfile._id) to userIds (User._id)
+        const employeeProfiles = await EmployeeProfile.find({ _id: { $in: collaboratorIds } });
+        const userIds = employeeProfiles.map(emp => emp.userId).filter(Boolean);
+
+        if (userIds.length !== collaboratorIds.length) {
+            return res.status(400).json({ message: "Some collaborator IDs could not be mapped to users" });
+        }
+
+        const editorIds = employeeProfiles.filter(emp => emp.accessLevel === "Editor").map(emp => emp.userId);
+        const viewerIds = employeeProfiles.filter(emp => emp.accessLevel === "Viewer").map(emp => emp.userId);
+
+        if (editorIds.length > 0 && editorIds.length > grantProposal.maxEditors) {
+            return res.status(400).json({ message: "Max editors reached" });
+        }
+
+        if (viewerIds.length > 0 && viewerIds.length > grantProposal.maxViewers) {
+            return res.status(400).json({ message: "Max viewers reached" });
+        }
+
+        // Update collaborators - store all as editors for simplicity
+        grantProposal.collaborators.editors = editorIds;
+        grantProposal.collaborators.viewers = viewerIds;
+
+        await grantProposal.save();
+
+        res.status(200).json({ message: "Collaborators updated successfully", grantProposal });
+    } catch (error) {
+        console.error('Set grant collaborators error:', error);
         res.status(500).json({ message: error.message || "Server error" });
     }
 };

@@ -34,6 +34,11 @@ let errorData = {
   data: null
 };
 
+let advancedComplianceCheckPdfErrorData = {
+  message: "Error in advancedComplianceCheckPdf",
+  data: null
+};
+
 require('dotenv').config();
 
 //Helper function to get file buffer from GridFS
@@ -197,8 +202,8 @@ exports.basicComplianceCheckPdf = [
 exports.advancedComplianceCheckPdf = [
   singleFileUpload,
   async (req, res) => {
+    const { file } = req;
     try {
-      const { file } = req;
       const { rfpId } = req.body;
 
       // Set response headers for long-running request
@@ -316,16 +321,16 @@ exports.advancedComplianceCheckPdf = [
       try {
         jsonData = JSON.parse(jsonString);
       } catch (parseError) {
-        errorData.data = jsonString;
+        advancedComplianceCheckPdfErrorData.data = jsonString;
         await deleteGridFSFile(file.id);
         return res.status(500).json({
           message: "Failed to parse extracted JSON data",
           error: parseError.message,
-          data: errorData
+          data: advancedComplianceCheckPdfErrorData
         });
       }
 
-      errorData.data = jsonData;
+      advancedComplianceCheckPdfErrorData.data = jsonData;
 
       //Set timeout for 10 minutes
       const timeout = 10 * 60 * 1000;
@@ -420,7 +425,7 @@ exports.advancedComplianceCheckPdf = [
         return res.status(408).json({
           message: 'Request timeout - PDF processing is taking longer than expected. Please try again or contact support if the issue persists.',
           error: error.message,
-          data: errorData
+          data: advancedComplianceCheckPdfErrorData
         });
       }
 
@@ -430,12 +435,12 @@ exports.advancedComplianceCheckPdf = [
         return res.status(503).json({
           message: 'AI service temporarily unavailable. Please try again in a few moments.',
           error: error.message,
-          data: errorData
+          data: advancedComplianceCheckPdfErrorData
         });
       }
 
       await deleteGridFSFile(file.id);
-      res.status(500).json({ message: error.message, data: errorData });
+      res.status(500).json({ message: error.message, data: advancedComplianceCheckPdfErrorData });
     }
   }
 ];

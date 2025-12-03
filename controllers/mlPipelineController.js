@@ -234,11 +234,14 @@ exports.getSavedAndDraftRFPs = async (req, res) => {
       }
     });
 
-    const draftRFPs = await DraftRFP.find({ userEmail }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean();
+    const draftRFPs = await DraftRFP.find({ userEmail })
+      .populate('collaborators.owner', '_id fullName email')
+      .populate('collaborators.editors', '_id fullName email')
+      .sort({ createdAt: -1 }).lean();
     const draftRFPs_1 = draftRFPs.map((item) => {
       return {
         docx_base64: item.docx_base64,
-        currentEditor: item.currentEditor,
+        collaborators: item.collaborators,
         proposalId: item.proposalId,
         rfpId: item.rfpId,
         ...item.rfp,
@@ -521,6 +524,9 @@ exports.sendDataForProposalGeneration = async (req, res) => {
 
             let noOfAttempts = current_subscription.plan_name === "Free" ? 0 : current_subscription.plan_name === "Basic" ? 2 : ["Pro", "Enterprise", "Custom Enterprise Plan"].includes(current_subscription.plan_name) ? 3 : 0;
 
+            // Determine editors: if user is not the owner, add them to editors
+            const editors = req.user._id.toString() !== userId.toString() ? [req.user._id] : [];
+
             const new_Proposal = new Proposal({
               rfpId: proposal._id || "",
               noOfAttempts: noOfAttempts,
@@ -534,7 +540,6 @@ exports.sendDataForProposalGeneration = async (req, res) => {
               deadline: getDeadline(proposal.deadline),
               status: "In Progress",
               submittedAt: new Date(),
-              currentEditor: req.user._id,
               isDeleted: false,
               deletedAt: null,
               deletedBy: null,
@@ -544,6 +549,13 @@ exports.sendDataForProposalGeneration = async (req, res) => {
               restoreBy: null,
               restoredBy: null,
               restoredAt: null,
+              maxEditors: current_subscription.max_editors,
+              maxViewers: current_subscription.max_viewers,
+              collaborators: {
+                owner: userId,
+                editors: editors,
+                viewers: []
+              },
             });
 
             await new_Proposal.save({ session });
@@ -556,7 +568,11 @@ exports.sendDataForProposalGeneration = async (req, res) => {
               rfp: { ...proposal },
               generatedProposal: data,
               docx_base64: document,
-              currentEditor: req.user._id,
+              collaborators: {
+                owner: userId,
+                editors: editors,
+                viewers: []
+              },
             });
             await new_Draft.save({ session });
 
@@ -678,6 +694,7 @@ exports.sendDataForProposalGeneration = async (req, res) => {
       await new_ProposalTracker.save();
 
       //Create a new draft proposal
+      const editors = req.user._id.toString() !== userId.toString() ? [req.user._id] : [];
       const new_Draft = new DraftRFP({
         userEmail: userEmail,
         rfpId: proposal._id,
@@ -685,7 +702,11 @@ exports.sendDataForProposalGeneration = async (req, res) => {
         rfp: { ...proposal },
         generatedProposal: null,
         docx_base64: null,
-        currentEditor: req.user._id,
+        collaborators: {
+          owner: userId,
+          editors: editors,
+          viewers: []
+        },
       });
       await new_Draft.save();
 
@@ -1582,13 +1603,16 @@ exports.getSavedAndDraftGrants = async (req, res) => {
     });
 
 
-    const draftGrants = await DraftGrant.find({ userEmail: userEmail }).populate('currentEditor', '_id fullName email').sort({ createdAt: -1 }).lean();
+    const draftGrants = await DraftGrant.find({ userEmail: userEmail })
+      .populate('collaborators.owner', '_id fullName email')
+      .populate('collaborators.editors', '_id fullName email')
+      .sort({ createdAt: -1 }).lean();
     const draftGrants_1 = draftGrants.map((item) => {
       return {
         _id: item.grant._id,
         ...item.grant,
         docx_base64: item.docx_base64,
-        currentEditor: item.currentEditor,
+        collaborators: item.collaborators,
         proposalId: item.proposalId,
         grantId: item.grantId,
       };
@@ -1729,7 +1753,16 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
           const session = await mongoose.startSession();
           session.startTransaction();
 
+          const current_subscription = await Subscription.findOne({ user_id: userId });
+          if (!current_subscription) {
+            await session.abortTransaction();
+            return res.status(400).json({ error: 'Subscription not found' });
+          }
+
           try {
+            // Determine editors: if user is not the owner, add them to editors
+            const editors = req.user._id.toString() !== userId.toString() ? [req.user._id] : [];
+
             const new_prop = new GrantProposal({
               grantId: grant._id,
               project_inputs: formData,
@@ -1743,7 +1776,6 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
               url: grant.OPPORTUNITY_NUMBER_LINK || "",
               status: "In Progress",
               submittedAt: new Date(),
-              currentEditor: req.user._id,
               isDeleted: false,
               deletedAt: null,
               deletedBy: null,
@@ -1754,6 +1786,13 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
               restoredAt: null,
               restoredBy: null,
               restoredAt: null,
+              maxEditors: current_subscription.max_editors,
+              maxViewers: current_subscription.max_viewers,
+              collaborators: {
+                owner: userId,
+                editors: editors,
+                viewers: []
+              },
             });
             await new_prop.save({ session });
             new_prop_id = new_prop._id;
@@ -1764,7 +1803,11 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
               grant: grant,
               generatedProposal: data,
               docx_base64: document,
-              currentEditor: req.user._id,
+              collaborators: {
+                owner: userId,
+                editors: editors,
+                viewers: []
+              },
               proposalId: new_prop._id,
             });
             await new_Draft.save({ session });
@@ -1798,14 +1841,8 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
             proposalTracker.grantProposalId = new_prop._id;
             await proposalTracker.save({ session });
 
-            const subscription_1 = await Subscription.findOne({ user_id: userId });
-            if (!subscription_1) {
-              await session.abortTransaction();
-              return res.status(400).json({ error: 'Subscription not found' });
-            }
-
-            subscription_1.current_grant_proposal_generations++;
-            await subscription_1.save({ session });
+            current_subscription.current_grant_proposal_generations++;
+            await current_subscription.save({ session });
 
             await session.commitTransaction();
           } catch (error) {
@@ -1856,13 +1893,18 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
     await new_tracker.save();
 
     //Create a new draft proposal
+    const editors = req.user._id.toString() !== userId.toString() ? [req.user._id] : [];
     const new_Draft = new DraftGrant({
       grantId: grant._id,
       userEmail: userEmail,
       grant: grant,
       generatedProposal: null,
       docx_base64: null,
-      currentEditor: req.user._id,
+      collaborators: {
+        owner: userId,
+        editors: editors,
+        viewers: []
+      },
       proposalId: null,
     });
     await new_Draft.save();
@@ -1941,7 +1983,12 @@ exports.getRFPProposal = async (req, res) => {
 
           const new_Draft = await DraftRFP.findOne({ rfpId: proposal.rfpId, userEmail: userEmail });
 
-          const currentEditor = new_Draft.currentEditor ? new_Draft.currentEditor : req.user._id;
+          // Get editors from draft, or use empty array if draft doesn't exist
+          const draftEditors = new_Draft && new_Draft.collaborators && new_Draft.collaborators.editors.length > 0
+            ? new_Draft.collaborators.editors
+            : (req.user._id.toString() !== userId.toString() ? [req.user._id] : []);
+          // Use first editor or owner for calendar event
+          const employeeIdForCalendar = draftEditors.length > 0 ? draftEditors[0] : userId;
 
           const current_subscription = await Subscription.findOne({ user_id: userId });
 
@@ -1965,7 +2012,6 @@ exports.getRFPProposal = async (req, res) => {
             url: proposal.url || "",
             status: "In Progress",
             submittedAt: new Date(),
-            currentEditor: currentEditor,
             isDeleted: false,
             deletedAt: null,
             deletedBy: null,
@@ -1974,7 +2020,14 @@ exports.getRFPProposal = async (req, res) => {
             savedBy: null,
             restoreBy: null,
             restoredBy: null,
-            restoredAt: null
+            restoredAt: null,
+            maxEditors: current_subscription.max_editors,
+            maxViewers: current_subscription.max_viewers,
+            collaborators: {
+              owner: userId,
+              editors: draftEditors,
+              viewers: []
+            },
           });
           await new_prop.save({ session });
           new_prop_id = new_prop._id;
@@ -1983,13 +2036,21 @@ exports.getRFPProposal = async (req, res) => {
             new_Draft.docx_base64 = document;
             new_Draft.generatedProposal = data;
             new_Draft.proposalId = new_prop_id;
+            // Update collaborators if they exist
+            if (new_Draft.collaborators) {
+              new_Draft.collaborators.editors = draftEditors;
+            }
             await new_Draft.save({ session });
           } else {
             const newDraft = new DraftRFP({
               rfpId: proposal.rfpId,
               userEmail: userEmail,
               rfp: proposal,
-              currentEditor: currentEditor,
+              collaborators: {
+                owner: userId,
+                editors: draftEditors,
+                viewers: []
+              },
               generatedProposal: data,
               docx_base64: document,
               proposalId: new_prop_id
@@ -1999,7 +2060,7 @@ exports.getRFPProposal = async (req, res) => {
 
           const new_CalendarEvent = new CalendarEvent({
             companyId: companyProfile_1._id,
-            employeeId: currentEditor,
+            employeeId: employeeIdForCalendar,
             proposalId: new_prop_id,
             rfpId: proposal.rfpId,
             title: proposal.title || "Not found",
@@ -2012,7 +2073,7 @@ exports.getRFPProposal = async (req, res) => {
           //Also add new calendar event with deadline
           const new_CalendarEvent_Deadline = new CalendarEvent({
             companyId: companyProfile_1._id,
-            employeeId: currentEditor,
+            employeeId: employeeIdForCalendar,
             proposalId: new_prop_id,
             rfpId: proposal.rfpId,
             title: proposal.title || "Not found",
@@ -2026,13 +2087,8 @@ exports.getRFPProposal = async (req, res) => {
           proposalTracker.proposalId = new_prop_id;
           await proposalTracker.save({ session });
 
-          const subscription_1 = await Subscription.findOne({ user_id: userId });
-          if (!subscription_1) {
-            return res.status(400).json({ error: "Subscription not found" });
-          }
-
-          subscription_1.current_rfp_proposal_generations++;
-          await subscription_1.save({ session });
+          current_subscription.current_rfp_proposal_generations++;
+          await current_subscription.save({ session });
 
           await session.commitTransaction();
         } catch (error) {
@@ -2118,7 +2174,19 @@ exports.getGrantProposal = async (req, res) => {
 
           const new_Draft = await DraftGrant.findOne({ grantId: grant.grantId, userEmail: userEmail });
 
-          const currentEditor = new_Draft ? new_Draft.currentEditor : req.user._id;
+          // Get editors from draft, or use empty array if draft doesn't exist
+          const draftEditors = new_Draft && new_Draft.collaborators && new_Draft.collaborators.editors.length > 0
+            ? new_Draft.collaborators.editors
+            : (req.user._id.toString() !== userId.toString() ? [req.user._id] : []);
+          // Use first editor or owner for calendar event
+          const employeeIdForCalendar = draftEditors.length > 0 ? draftEditors[0] : userId;
+
+          const current_subscription = await Subscription.findOne({ user_id: userId });
+          if (!current_subscription) {
+            await session.abortTransaction();
+            return res.status(400).json({ error: 'Subscription not found' });
+          }
+
           const new_prop = new GrantProposal({
             grantId: grant.grantId,
             project_inputs: proposalTracker.formData,
@@ -2132,7 +2200,6 @@ exports.getGrantProposal = async (req, res) => {
             url: grant.OPPORTUNITY_NUMBER_LINK || "",
             status: "In Progress",
             submittedAt: new Date(),
-            currentEditor: currentEditor,
             isDeleted: false,
             deletedAt: null,
             deletedBy: null,
@@ -2142,7 +2209,14 @@ exports.getGrantProposal = async (req, res) => {
             restoreBy: null,
             restoredBy: null,
             restoredAt: null,
-            isRestored: false
+            isRestored: false,
+            maxEditors: current_subscription.max_editors,
+            maxViewers: current_subscription.max_viewers,
+            collaborators: {
+              owner: userId,
+              editors: draftEditors,
+              viewers: []
+            },
           });
           await new_prop.save({ session });
           new_prop_id = new_prop._id;
@@ -2152,7 +2226,11 @@ exports.getGrantProposal = async (req, res) => {
               grantId: grant.grantId,
               grant: grant,
               userEmail: userEmail,
-              currentEditor: currentEditor,
+              collaborators: {
+                owner: userId,
+                editors: draftEditors,
+                viewers: []
+              },
               generatedProposal: data,
               docx_base64: document,
               proposalId: new_prop_id,
@@ -2162,12 +2240,16 @@ exports.getGrantProposal = async (req, res) => {
             new_Draft.proposalId = new_prop_id;
             new_Draft.generatedProposal = data;
             new_Draft.docx_base64 = document;
+            // Update collaborators if they exist
+            if (new_Draft.collaborators) {
+              new_Draft.collaborators.editors = draftEditors;
+            }
             await new_Draft.save({ session });
           }
 
           const new_CalendarEvent = new CalendarEvent({
             companyId: companyProfile_1._id,
-            employeeId: currentEditor,
+            employeeId: employeeIdForCalendar,
             proposalId: new_prop_id,
             grantId: grant.grantId,
             title: grant.OPPORTUNITY_TITLE || "Not found",
@@ -2180,7 +2262,7 @@ exports.getGrantProposal = async (req, res) => {
           //Also add new calendar event with deadline
           const new_CalendarEvent_Deadline = new CalendarEvent({
             companyId: companyProfile_1._id,
-            employeeId: currentEditor,
+            employeeId: employeeIdForCalendar,
             proposalId: new_prop_id,
             grantId: grant.grantId,
             title: grant.OPPORTUNITY_TITLE || "Not found",
@@ -2192,13 +2274,8 @@ exports.getGrantProposal = async (req, res) => {
           proposalTracker.status = "success";
           proposalTracker.grantProposalId = new_prop_id;
           await proposalTracker.save({ session });
-          const subscription_1 = await Subscription.findOne({ user_id: userId });
-          if (!subscription_1) {
-            return res.status(400).json({ error: "Subscription not found" });
-          }
-
-          subscription_1.current_grant_proposal_generations++;
-          await subscription_1.save({ session });
+          current_subscription.current_grant_proposal_generations++;
+          await current_subscription.save({ session });
           await session.commitTransaction();
         } catch (error) {
           await session.abortTransaction();

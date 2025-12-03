@@ -326,12 +326,18 @@ exports.getProposals = async (req, res) => {
             companyMail = employeeProfile.companyMail;
         }
 
-        const proposals = await Proposal.find({ companyMail: companyMail }).populate("currentEditor", "_id fullName email").lean();
+        const proposals = await Proposal.find({ companyMail: companyMail })
+            .populate("collaborators.owner", "_id fullName email")
+            .populate("collaborators.editors", "_id fullName email")
+            .lean();
         const proposals_1 = proposals.map(proposal => {
             const { initialProposal, generatedProposal, ...rest } = proposal;
             return rest;
         });
-        const grantProposals = await GrantProposal.find({ companyMail: companyMail }).populate("currentEditor", "_id fullName email").lean();
+        const grantProposals = await GrantProposal.find({ companyMail: companyMail })
+            .populate("collaborators.owner", "_id fullName email")
+            .populate("collaborators.editors", "_id fullName email")
+            .lean();
         const grantProposals_1 = grantProposals.map(proposal => {
             const { initialProposal, generatedProposal, ...rest } = proposal;
             return rest;
@@ -970,6 +976,11 @@ exports.addDocument = [
 
 exports.getProfileImage = async (req, res) => {
     try {
+        res.setHeader('Content-Type', 'image/png' || 'image/jpeg' || 'image/jpg' || 'image/webp');
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        res.setHeader("Cross-Origin-Opener-Policy", "cross-origin");
+        res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none"); // For viewing inside iframe
+
         const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
             bucketName: "uploads",
         });
@@ -1176,17 +1187,23 @@ exports.deleteEmployee = async (req, res) => {
 
             await companyProfile.save({ session });
 
-            const proposals = await Proposal.find({ currentEditor: userId });
+            // Find proposals where the user is in collaborators.editors
+            const proposals = await Proposal.find({ "collaborators.editors": userId });
 
-            const grantProposals = await GrantProposal.find({ currentEditor: userId });
+            const grantProposals = await GrantProposal.find({ "collaborators.editors": userId });
 
             if (proposals.length > 0 || grantProposals.length > 0) {
+                // Remove the user from editors array
                 await Promise.all(proposals.map(async (proposal) => {
-                    proposal.currentEditor = companyProfile.userId;
+                    proposal.collaborators.editors = proposal.collaborators.editors.filter(
+                        editorId => editorId.toString() !== userId.toString()
+                    );
                     await proposal.save({ session });
                 }));
                 await Promise.all(grantProposals.map(async (grantProposal) => {
-                    grantProposal.currentEditor = companyProfile.userId;
+                    grantProposal.collaborators.editors = grantProposal.collaborators.editors.filter(
+                        editorId => editorId.toString() !== userId.toString()
+                    );
                     await grantProposal.save({ session });
                 }));
             }

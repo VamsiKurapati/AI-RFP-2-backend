@@ -16,7 +16,7 @@ const { queueEmail } = require("../utils/mailSender");
 const { validateEmail, validatePassword, sanitizeInput, validateRequiredFields } = require("../utils/validation");
 const { cleanupUploadedFiles } = require("../utils/fileCleanup");
 const emailTemplates = require("../utils/emailTemplates");
-// const { invalidatePreviousToken, setActiveToken, blacklistToken, invalidateAllUserTokens } = require("../utils/tokenManager");
+const { invalidatePreviousToken, setActiveToken, blacklistToken, invalidateAllUserTokens } = require("../utils/tokenManager");
 
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
@@ -149,18 +149,20 @@ exports.signupWithProfile = [
         await notification.save({ session });
 
         //Create a free subscription for the user with the free plan of 1 proposal generation and 1 grant proposal generation
+        const randomSubId = crypto.randomInt(100000, 999999).toString();
         const freeSubscription = new Subscription({
           user_id: user._id,
           plan_name: "Free",
           plan_price: 0,
           start_date: new Date(),
+          stripeProductId: randomSubId,
           end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
           max_rfp_proposal_generations: 1,
           max_grant_proposal_generations: 1,
           max_editors: 0,
           max_viewers: 0,
-          current_rfp_proposal_generations: 0,
-          current_grant_proposal_generations: 0,
+          max_magic_brush_usage: 0,
+          max_image_generation_usage: 0,
           auto_renewal: false,
         });
         await freeSubscription.save({ session });
@@ -247,7 +249,7 @@ exports.login = async (req, res) => {
     }
 
     // Invalidate previous token (single-device login)
-    // await invalidatePreviousToken(user._id.toString());
+    await invalidatePreviousToken(user._id.toString());
 
     const token = jwt.sign(
       { user: userWithoutPassword },
@@ -256,7 +258,7 @@ exports.login = async (req, res) => {
     );
 
     // Set this token as the active token for the user
-    // await setActiveToken(user._id.toString(), token, 12 * 60 * 60); // 12 hours in seconds
+    await setActiveToken(user._id.toString(), token, 12 * 60 * 60); // 12 hours in seconds
 
     if (user.role === "SuperAdmin" || user.role === "company") {
       const subscription = await Subscription.find({ user_id: user._id }).sort({ created_at: -1 }).limit(1).lean();
@@ -266,6 +268,10 @@ exports.login = async (req, res) => {
           plan_name: "None",
           max_rfp_proposal_generations: 0,
           max_grant_proposal_generations: 0,
+          max_magic_brush_usage: 0,
+          max_image_generation_usage: 0,
+          current_magic_brush_usage: 0,
+          current_image_generation_usage: 0,
         };
       } else {
         subscriptionData = subscription[0];
@@ -281,7 +287,7 @@ exports.login = async (req, res) => {
         // Don't fail login if email fails
       }
 
-      user.onboarding_status = true;
+      // user.onboarding_status = true;
       await user.save();
 
       return res.status(200).json({ token, user: userWithoutPassword, subscription: subscriptionData });
@@ -309,6 +315,10 @@ exports.login = async (req, res) => {
           plan_name: "None",
           max_rfp_proposal_generations: 0,
           max_grant_proposal_generations: 0,
+          max_magic_brush_usage: 0,
+          max_image_generation_usage: 0,
+          current_magic_brush_usage: 0,
+          current_image_generation_usage: 0,
         };
       } else {
         subscriptionData = subscription[0];
@@ -374,10 +384,10 @@ exports.logout = async (req, res) => {
     // If we have a user ID, invalidate tokens
     if (userId) {
       // Blacklist the token (even if expired, blacklist until it would have expired)
-      // await blacklistToken(token, 12 * 60 * 60);
+      await blacklistToken(token, 12 * 60 * 60);
 
       // Remove active token (allows user to login again immediately)
-      // await invalidateAllUserTokens(userId.toString());
+      await invalidateAllUserTokens(userId.toString());
     }
 
     // Always return success for logout (even if token is invalid/expired)

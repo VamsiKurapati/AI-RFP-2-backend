@@ -26,15 +26,20 @@ const DraftRFPSchema = new mongoose.Schema({
     },
     generatedProposal: { type: Object, required: false, default: null },
     docx_base64: { type: String, default: null },
-    currentEditor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    collaborators: {
+        owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        editors: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }],
+        viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }],
+    },
 }, { timestamps: true });
 
 // Database indexes for performance optimization
 DraftRFPSchema.index({ userEmail: 1 });
 DraftRFPSchema.index({ rfpId: 1 });
 DraftRFPSchema.index({ proposalId: 1 });
-DraftRFPSchema.index({ currentEditor: 1 });
 DraftRFPSchema.index({ createdAt: -1 });
+DraftRFPSchema.index({ "collaborators.owner": 1 });
+DraftRFPSchema.index({ "collaborators.editors": 1 });
 // Compound index for common query patterns
 DraftRFPSchema.index({ userEmail: 1, createdAt: -1 });
 

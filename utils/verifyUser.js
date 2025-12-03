@@ -1,6 +1,7 @@
 const { errorHandler } = require("./error");
 const jwt = require('jsonwebtoken');
 const EmployeeProfile = require('../models/EmployeeProfile');
+const { isTokenBlacklisted, isActiveToken, getUserIdFromToken } = require('./tokenManager');
 
 const verifyUser = (roles) => async (req, res, next) => {
     try {
@@ -15,6 +16,12 @@ const verifyUser = (roles) => async (req, res, next) => {
             return next(errorHandler(401, "Unauthorized: Token is empty or incorrect"));
         }
 
+        // Check if token is blacklisted
+        const isBlacklisted = await isTokenBlacklisted(token);
+        if (isBlacklisted) {
+            return next(errorHandler(401, "Unauthorized: Token has been revoked"));
+        }
+
         jwt.verify(token, process.env.JWT_SECRET, async (err, decoded) => {
             if (err) {
                 return next(errorHandler(403, `Forbidden: ${err}`));
@@ -23,6 +30,13 @@ const verifyUser = (roles) => async (req, res, next) => {
             const user = decoded.user;
             if (!user || !user.role) {
                 return next(errorHandler(401, "Unauthorized: Invalid user payload"));
+            }
+
+            // Check if this is the active token for the user (single-device login)
+            const userId = user._id || user.id;
+            const isActive = await isActiveToken(userId, token);
+            if (!isActive) {
+                return next(errorHandler(401, "Unauthorized: This session has been invalidated. Please login again."));
             }
 
             if (roles.length === 1 && roles[0] === "company") {

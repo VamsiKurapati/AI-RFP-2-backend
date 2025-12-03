@@ -14,20 +14,25 @@ const ProposalSchema = new mongoose.Schema({
   status: { type: String, required: true },
   submittedAt: { type: Date, default: Date.now },
   noOfAttempts: { type: Number, default: 0 },
-  currentEditor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, default: null },
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null },
   deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   restoreBy: { type: Date, default: null },
   restoredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   restoredAt: { type: Date, default: null },
+  maxEditors: { type: Number, default: 0 },
+  maxViewers: { type: Number, default: 0 },
+  collaborators: {
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, // Company email (owner)
+    editors: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }], // Array of editor emails
+    viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }], // Array of viewer emails
+  },
 }, { timestamps: true });
 
 // Database indexes for performance optimization
 ProposalSchema.index({ rfpId: 1 });
 ProposalSchema.index({ companyMail: 1 });
 ProposalSchema.index({ status: 1 });
-ProposalSchema.index({ currentEditor: 1 });
 ProposalSchema.index({ isDeleted: 1 });
 ProposalSchema.index({ deadline: 1 });
 ProposalSchema.index({ createdAt: -1 });
@@ -35,5 +40,8 @@ ProposalSchema.index({ createdAt: -1 });
 ProposalSchema.index({ companyMail: 1, status: 1 });
 ProposalSchema.index({ companyMail: 1, isDeleted: 1 });
 ProposalSchema.index({ companyMail: 1, createdAt: -1 });
+ProposalSchema.index({ "collaborators.owner": 1 });
+ProposalSchema.index({ "collaborators.editors": 1 });
+ProposalSchema.index({ "collaborators.viewers": 1 });
 
 module.exports = mongoose.model('Proposal', ProposalSchema);

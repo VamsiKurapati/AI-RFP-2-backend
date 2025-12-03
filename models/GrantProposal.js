@@ -13,7 +13,6 @@ const GrantProposalSchema = new mongoose.Schema({
     url: { type: String, required: false, default: "" },
     status: { type: String, required: true },
     submittedAt: { type: Date, default: Date.now },
-    currentEditor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, default: null },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -24,13 +23,19 @@ const GrantProposalSchema = new mongoose.Schema({
     restoreBy: { type: Date, default: null },
     restoredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     restoredAt: { type: Date, default: null },
+    maxEditors: { type: Number, default: 0 },
+    maxViewers: { type: Number, default: 0 },
+    collaborators: {
+        owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        editors: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }], // Array of editor emails
+        viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }], // Array of viewer emails
+    },
 }, { timestamps: true });
 
 // Database indexes for performance optimization
 GrantProposalSchema.index({ grantId: 1 });
 GrantProposalSchema.index({ companyMail: 1 });
 GrantProposalSchema.index({ status: 1 });
-GrantProposalSchema.index({ currentEditor: 1 });
 GrantProposalSchema.index({ isDeleted: 1 });
 GrantProposalSchema.index({ isSaved: 1 });
 GrantProposalSchema.index({ deadline: 1 });

@@ -33,7 +33,11 @@ const DraftGrantSchema = new mongoose.Schema({
     },
     generatedProposal: { type: Object, required: false, default: null },
     docx_base64: { type: String, default: null },
-    currentEditor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    collaborators: {
+        owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        editors: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }],
+        viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }],
+    },
     proposalId: { type: mongoose.Schema.Types.ObjectId, ref: "GrantProposal", required: false, default: null },
 }, { timestamps: true });
 
@@ -41,6 +45,8 @@ const DraftGrantSchema = new mongoose.Schema({
 DraftGrantSchema.index({ userEmail: 1 });
 DraftGrantSchema.index({ grantId: 1 });
 DraftGrantSchema.index({ createdAt: -1 });
+DraftGrantSchema.index({ "collaborators.owner": 1 });
+DraftGrantSchema.index({ "collaborators.editors": 1 });
 // Compound index for common query patterns
 DraftGrantSchema.index({ userEmail: 1, createdAt: -1 });
 
