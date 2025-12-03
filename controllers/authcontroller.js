@@ -149,13 +149,12 @@ exports.signupWithProfile = [
         await notification.save({ session });
 
         //Create a free subscription for the user with the free plan of 1 proposal generation and 1 grant proposal generation
-        const randomSubId = crypto.randomInt(100000, 999999).toString();
         const freeSubscription = new Subscription({
           user_id: user._id,
           plan_name: "Free",
           plan_price: 0,
           start_date: new Date(),
-          stripeProductId: randomSubId,
+          stripeProductId: null, // Free plans don't have Stripe product IDs
           end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
           max_rfp_proposal_generations: 1,
           max_grant_proposal_generations: 1,

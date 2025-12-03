@@ -976,15 +976,41 @@ exports.addDocument = [
 
 exports.getProfileImage = async (req, res) => {
     try {
-        res.setHeader('Content-Type', 'image/png' || 'image/jpeg' || 'image/jpg' || 'image/webp');
-        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-        res.setHeader("Cross-Origin-Opener-Policy", "cross-origin");
-        res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none"); // For viewing inside iframe
-
         const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
             bucketName: "uploads",
         });
         const fileId = new mongoose.Types.ObjectId(req.params.id);
+
+        // Get file metadata to determine actual content type
+        const filesCollection = mongoose.connection.db.collection('uploads.files');
+        const fileDoc = await filesCollection.findOne({ _id: fileId });
+
+        if (!fileDoc) {
+            return res.status(404).send("File not found");
+        }
+
+        // Determine content type from metadata or filename extension
+        let contentType = fileDoc.contentType;
+        if (!contentType) {
+            // Fallback: infer from filename extension
+            const filename = fileDoc.filename || '';
+            const ext = filename.toLowerCase().split('.').pop();
+            const mimeTypes = {
+                'png': 'image/png',
+                'jpg': 'image/jpeg',
+                'jpeg': 'image/jpeg',
+                'gif': 'image/gif',
+                'webp': 'image/webp',
+                'svg': 'image/svg+xml'
+            };
+            contentType = mimeTypes[ext] || 'image/png'; // Default to PNG if unknown
+        }
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        res.setHeader("Cross-Origin-Opener-Policy", "cross-origin");
+        res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none"); // For viewing inside iframe
+
         const downloadStream = bucket.openDownloadStream(fileId);
         downloadStream.on("error", () => res.status(404).send("File not found"));
         downloadStream.pipe(res);

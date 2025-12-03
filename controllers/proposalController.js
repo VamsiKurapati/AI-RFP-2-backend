@@ -119,7 +119,6 @@ exports.basicComplianceCheckPdf = [
       }
 
       if (!file) {
-        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "No file uploaded" });
       }
 
@@ -266,7 +265,6 @@ exports.advancedComplianceCheckPdf = [
       }
 
       if (!file) {
-        await deleteGridFSFile(file.id);
         return res.status(400).json({ message: "No file uploaded" });
       }
 
