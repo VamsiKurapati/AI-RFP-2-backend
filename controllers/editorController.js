@@ -8,7 +8,7 @@ const Proposal = require("../models/Proposal");
 const EmployeeProfile = require("../models/EmployeeProfile");
 const User = require("../models/User");
 const GrantProposal = require("../models/GrantProposal");
-
+const CompanyProfile = require("../models/CompanyProfile");
 // GridFS Bucket for document storage
 const getGridFSBucket = () => {
     return new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
@@ -28,17 +28,13 @@ const keyToFileIdMap = new Map();
 
 // Helper function to sanitize file names
 function sanitizeFileName(str) {
-    return str
-        .replace(/[^a-zA-Z0-9]/g, "_")
-        .replace(/_+/g, "_")
-        .toLowerCase();
+    return str.replaceAll(" ", "_")
 }
 
 // Build file path/filename with company_name/projectName structure
-function buildFileName(companyName, projectName) {
-    const sanitizedCompany = sanitizeFileName(companyName);
-    const sanitizedProject = sanitizeFileName(projectName);
-    return `${sanitizedCompany}_${sanitizedProject}.docx`;
+function buildFileName(type, projectName, companyName, companyMail) {
+    const filename = `${type.toUpperCase()} Proposal for ${projectName.substring(0, 50)} from ${companyName.substring(0, 50)}(${companyMail.substring(0, 50)})`;
+    return `${sanitizeFileName(filename)}.docx`;
 }
 
 // Sanitize key for OnlyOffice (key must match pattern: 0-9-.a-zA-Z_=)
@@ -282,11 +278,14 @@ exports.generateDoc = async (req, res) => {
             return res.status(403).json({ error: "You do not have permission to access this proposal" });
         }
 
-        const docx_base64 = proposal.docx_base64;
-        const companyName = proposal.client;
-        const projectName = proposal.title;
+        const companyProfile = await CompanyProfile.findOne({ email: companyMail });
+        if (!companyProfile) {
+            return res.status(404).json({ error: "Company profile not found" });
+        }
 
-        const filename = buildFileName(companyName, projectName);
+        const docx_base64 = proposal.docx_base64;
+
+        const filename = buildFileName(type, proposal.title, companyProfile.companyName, companyMail);
         const bucket = getGridFSBucket();
 
         // Check if file exists in GridFS
@@ -301,7 +300,7 @@ exports.generateDoc = async (req, res) => {
                 try {
                     // Decode base64 string to buffer
                     docxBuffer = Buffer.from(docx_base64, 'base64');
-                    console.log(`[generateDoc] Decoded base64 document (${docxBuffer.length} bytes)`);
+                    //console.log(`[generateDoc] Decoded base64 document (${docxBuffer.length} bytes)`);
                 } catch (decodeError) {
                     return res.status(400).json({ error: "Invalid base64 format for docx_base64" });
                 }
@@ -311,22 +310,24 @@ exports.generateDoc = async (req, res) => {
 
             // Save to GridFS
             fileId = await saveBufferToGridFS(docxBuffer, filename, {
-                companyName,
-                projectName
+                companyMail: companyMail,
+                companyName: companyProfile.companyName,
+                projectName: proposal.title,
+                client: proposal.client,
             });
-            console.log(`[generateDoc] Generated new file: ${filename} (ID: ${fileId})`);
+            //console.log(`[generateDoc] Generated new file: ${filename} (ID: ${fileId})`);
         } else {
             fileId = existingFile._id;
-            console.log(`[generateDoc] Using existing file: ${filename} (ID: ${fileId})`);
+            //console.log(`[generateDoc] Using existing file: ${filename} (ID: ${fileId})`);
         }
 
         // Verify file exists in GridFS before returning URL
         const verifyFiles = await bucket.find({ _id: fileId }).toArray();
         if (verifyFiles.length === 0) {
-            console.error(`[generateDoc] File ${fileId} not found in GridFS after creation/retrieval`);
+            //console.error(`[generateDoc] File ${fileId} not found in GridFS after creation/retrieval`);
             return res.status(500).json({ error: "File not found in storage" });
         }
-        console.log(`[generateDoc] Verified file exists: ${verifyFiles[0].filename}, size: ${verifyFiles[0].length} bytes`);
+        //console.log(`[generateDoc] Verified file exists: ${verifyFiles[0].filename}, size: ${verifyFiles[0].length} bytes`);
 
         // Get user info for OnlyOffice
         const userInfo = {
@@ -335,17 +336,17 @@ exports.generateDoc = async (req, res) => {
         };
 
         const fileUrl = getFileUrl(fileId);
-        console.log(`[generateDoc] Generated file URL: ${fileUrl} for fileId: ${fileId}`);
-        console.log(`[generateDoc] BASE_URL: ${BASE_URL}`);
-        console.log(`[generateDoc] User: ${userId}, Permission: ${permission.role}, CanEdit: ${permission.canEdit}`);
+        //console.log(`[generateDoc] Generated file URL: ${fileUrl} for fileId: ${fileId}`);
+        //console.log(`[generateDoc] BASE_URL: ${BASE_URL}`);
+        //console.log(`[generateDoc] User: ${userId}, Permission: ${permission.role}, CanEdit: ${permission.canEdit}`);
 
         let config = buildConfig(filename, fileId, fileUrl, userInfo, permission.canEdit);
         config = signConfig(config);
 
-        console.log(`[generateDoc] Returning config with key: ${config.document.key}`);
+        //console.log(`[generateDoc] Returning config with key: ${config.document.key}`);
         res.json({ ...config, fileId: fileId.toString(), filename, userRole: permission.role });
     } catch (error) {
-        console.error("Error in generate-doc:", error);
+        //console.error("Error in generate-doc:", error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -353,7 +354,7 @@ exports.generateDoc = async (req, res) => {
 // API: Open GridFS file by filename
 exports.openFile = async (req, res) => {
     try {
-        //console.log("openFile");
+        ////console.log("openFile");
         const filename = req.query.filename;
         if (!filename) return res.status(400).json({ error: "filename required" });
 
@@ -367,7 +368,7 @@ exports.openFile = async (req, res) => {
 
         res.json({ ...config, fileId: fileId.toString() });
     } catch (error) {
-        console.error("Error opening file:", error);
+        //console.error("Error opening file:", error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -375,7 +376,7 @@ exports.openFile = async (req, res) => {
 // API: Check file existence
 exports.checkFile = async (req, res) => {
     try {
-        //console.log("checkFile");
+        ////console.log("checkFile");
         const { companyName, projectName } = req.query;
         if (!companyName || !projectName) return res.status(400).json({ error: "Missing params" });
 
@@ -402,7 +403,7 @@ async function getFileIdFromOnlyOfficeKey(onlyOfficeKey) {
 
     // 2. Fallback: Try to find file by reconstructing filename if server restarted
     // The key is sanitized filename, so we can try to find it in GridFS
-    //console.warn(`[API] Key ${onlyOfficeKey} not found in memory map. Attempting fallback...`);
+    ////console.warn(`[API] Key ${onlyOfficeKey} not found in memory map. Attempting fallback...`);
 
     // Try to find file by filename (the key should match the filename pattern)
     const bucket = getGridFSBucket();
@@ -410,7 +411,7 @@ async function getFileIdFromOnlyOfficeKey(onlyOfficeKey) {
 
     if (files.length > 0) {
         const fileId = files[0]._id.toString();
-        //console.log(`[API] Fallback success: Found file ID ${fileId} for key ${onlyOfficeKey}`);
+        ////console.log(`[API] Fallback success: Found file ID ${fileId} for key ${onlyOfficeKey}`);
         keyToFileIdMap.set(onlyOfficeKey, fileId);
         return fileId;
     }
@@ -423,7 +424,7 @@ async function getFileIdFromOnlyOfficeKey(onlyOfficeKey) {
 
     if (partialMatch.length > 0) {
         const fileId = partialMatch[0]._id.toString();
-        //console.log(`[API] Partial match found: File ID ${fileId} for key ${onlyOfficeKey}`);
+        ////console.log(`[API] Partial match found: File ID ${fileId} for key ${onlyOfficeKey}`);
         keyToFileIdMap.set(onlyOfficeKey, fileId);
         return fileId;
     }
@@ -433,7 +434,7 @@ async function getFileIdFromOnlyOfficeKey(onlyOfficeKey) {
 
 // [CRITICAL FIX] API: Save Callback
 exports.save = async (req, res) => {
-    //console.log("save");
+    ////console.log("save");
     // 1. SEND RESPONSE IMMEDIATELY
     // This stops OnlyOffice from waiting and timing out ("File version has changed" error)
     res.status(200).json({ error: 0 });
@@ -444,21 +445,22 @@ exports.save = async (req, res) => {
     try {
         // Status 2 = Ready for Save, Status 6 = Force Save
         if ((status === 2 || status === 6) && url) {
-            //console.log(`[API] Background Save initiated for key: ${key}`);
+            ////console.log(`[API] Background Save initiated for key: ${key}`);
 
             const fileId = await getFileIdFromOnlyOfficeKey(key);
             if (!fileId) {
-                console.error(`[API] ❌ Could not map key '${key}' to a file ID. Save aborted.`);
+                //console.error(`[API] ❌ Could not map key '${key}' to a file ID. Save aborted.`);
                 return;
             }
 
-            //console.log(`[API] Downloading from OnlyOffice for file ID: ${fileId}`);
+            ////console.log(`[API] Downloading from OnlyOffice for file ID: ${fileId}`);
 
             // Fetch the file from OnlyOffice Document Server
             const response = await fetch(url);
             if (!response.ok) throw new Error(`OnlyOffice fetch failed: ${response.statusText}`);
 
-            const buffer = await response.arrayBuffer();
+            const arrayBuffer = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
 
             // Get existing file metadata
             const bucket = getGridFSBucket();
@@ -482,14 +484,14 @@ exports.save = async (req, res) => {
                 keyToFileIdMap.set(key, newFileId.toString());
             }
 
-            //console.log(`[API] ✅ Success: File saved to GridFS (ID: ${newFileId}, ${buffer.length} bytes)`);
+            ////console.log(`[API] ✅ Success: File saved to GridFS (ID: ${newFileId}, ${buffer.length} bytes)`);
         } else {
             // Just a status update (user joined/left)
-            // //console.log(`[API] Status update ${status} received. No save needed.`);
+            // ////console.log(`[API] Status update ${status} received. No save needed.`);
         }
     } catch (error) {
         // We cannot respond to the client (res is already sent), so we just log
-        console.error(`[API] ❌ Background Save ERROR:`, error.message);
+        //console.error(`[API] ❌ Background Save ERROR:`, error.message);
     }
 };
 
@@ -497,15 +499,15 @@ exports.save = async (req, res) => {
 exports.serveDoc = async (req, res) => {
     try {
         const fileId = req.params.fileId;
-        console.log(`[serveDoc] ===== REQUEST RECEIVED =====`);
-        console.log(`[serveDoc] FileId: ${fileId}`);
-        console.log(`[serveDoc] Method: ${req.method}`);
-        console.log(`[serveDoc] Headers:`, JSON.stringify(req.headers, null, 2));
-        console.log(`[serveDoc] URL: ${req.url}`);
-        console.log(`[serveDoc] IP: ${req.ip}`);
+        //console.log(`[serveDoc] ===== REQUEST RECEIVED =====`);
+        //console.log(`[serveDoc] FileId: ${fileId}`);
+        //console.log(`[serveDoc] Method: ${req.method}`);
+        //console.log(`[serveDoc] Headers:`, JSON.stringify(req.headers, null, 2));
+        //console.log(`[serveDoc] URL: ${req.url}`);
+        //console.log(`[serveDoc] IP: ${req.ip}`);
 
         if (!mongoose.Types.ObjectId.isValid(fileId)) {
-            console.error(`[serveDoc] Invalid file ID format: ${fileId}`);
+            //console.error(`[serveDoc] Invalid file ID format: ${fileId}`);
             return res.status(400).json({ error: "Invalid file ID format" });
         }
 
@@ -515,12 +517,12 @@ exports.serveDoc = async (req, res) => {
         // Check if file exists
         const files = await bucket.find({ _id: objectId }).toArray();
         if (files.length === 0) {
-            console.error(`[serveDoc] File not found in GridFS: ${fileId}`);
+            //console.error(`[serveDoc] File not found in GridFS: ${fileId}`);
             return res.status(404).json({ error: "File not found" });
         }
 
         const fileDoc = files[0];
-        console.log(`[serveDoc] Found file: ${fileDoc.filename}, size: ${fileDoc.length} bytes`);
+        //console.log(`[serveDoc] Found file: ${fileDoc.filename}, size: ${fileDoc.length} bytes`);
 
         // Set appropriate headers with CORS for OnlyOffice
         // OnlyOffice requires specific headers
@@ -536,39 +538,39 @@ exports.serveDoc = async (req, res) => {
             'X-Content-Type-Options': 'nosniff'
         });
 
-        console.log(`[serveDoc] Headers set, starting stream...`);
+        //console.log(`[serveDoc] Headers set, starting stream...`);
 
         // Stream file to response
         const downloadStream = bucket.openDownloadStream(objectId);
 
         downloadStream.on('error', (error) => {
-            console.error(`[serveDoc] Stream error for fileId ${fileId}:`, error.message);
-            console.error(`[serveDoc] Error stack:`, error.stack);
+            //console.error(`[serveDoc] Stream error for fileId ${fileId}:`, error.message);
+            //console.error(`[serveDoc] Error stack:`, error.stack);
             if (!res.headersSent) {
                 res.status(500).json({ error: error.message });
             } else {
-                console.error(`[serveDoc] Headers already sent, cannot send error response`);
+                //console.error(`[serveDoc] Headers already sent, cannot send error response`);
             }
         });
 
         downloadStream.on('end', () => {
-            console.log(`[serveDoc] ✅ Successfully served file: ${fileId}`);
+            //console.log(`[serveDoc] ✅ Successfully served file: ${fileId}`);
         });
 
         downloadStream.on('data', (chunk) => {
             // Log first chunk to verify streaming is working
             if (!downloadStream._loggedFirstChunk) {
-                console.log(`[serveDoc] First chunk received: ${chunk.length} bytes`);
+                //console.log(`[serveDoc] First chunk received: ${chunk.length} bytes`);
                 downloadStream._loggedFirstChunk = true;
             }
         });
 
         downloadStream.pipe(res);
 
-        console.log(`[serveDoc] Stream piped to response`);
+        //console.log(`[serveDoc] Stream piped to response`);
     } catch (error) {
-        console.error(`[serveDoc] ❌ Exception serving file ${req.params.fileId}:`, error.message);
-        console.error(`[serveDoc] Error stack:`, error.stack);
+        //console.error(`[serveDoc] ❌ Exception serving file ${req.params.fileId}:`, error.message);
+        //console.error(`[serveDoc] Error stack:`, error.stack);
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         }
@@ -672,7 +674,7 @@ exports.addCollaborator = async (req, res) => {
             collaborators: proposal.collaborators
         });
     } catch (error) {
-        console.error("Error in addCollaborator:", error);
+        //console.error("Error in addCollaborator:", error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -743,7 +745,7 @@ exports.removeCollaborator = async (req, res) => {
             collaborators: proposal.collaborators
         });
     } catch (error) {
-        console.error("Error in removeCollaborator:", error);
+        //console.error("Error in removeCollaborator:", error);
         res.status(500).json({ error: error.message });
     }
 };
@@ -793,7 +795,7 @@ exports.getCollaborators = async (req, res) => {
 
         res.json({ collaborators: proposal.collaborators });
     } catch (error) {
-        console.error("Error in getCollaborators:", error);
+        //console.error("Error in getCollaborators:", error);
         res.status(500).json({ error: error.message });
     }
 };

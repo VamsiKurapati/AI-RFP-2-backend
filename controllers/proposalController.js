@@ -9,6 +9,7 @@ const GrantProposal = require('../models/GrantProposal');
 const DraftGrant = require('../models/DraftGrant');
 const Subscription = require('../models/Subscription');
 const CompanyProfile = require('../models/CompanyProfile');
+const CompetitorAnalysisCache = require('../models/CompetitorAnalysisCache');
 
 const { decompress } = require('../utils/decompress');
 const { convertPdfToJsonFile } = require('../utils/pdfToJsonConverter');
@@ -442,6 +443,89 @@ exports.advancedComplianceCheckPdf = [
     }
   }
 ];
+
+exports.competitorAnalysis = async (req, res) => {
+  try {
+    const { rfpId } = req.body;
+
+    if (!rfpId) {
+      return res.status(400).json({ message: "rfpId is required" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(rfpId)) {
+      return res.status(400).json({ message: "Invalid RFP ID format" });
+    }
+
+    const rfp = await RFP.findOne({ _id: rfpId });
+    if (!rfp) {
+      return res.status(404).json({ message: "RFP not found" });
+    }
+
+    let userEmail = req.user.email;
+    let userId = req.user._id;
+
+    if (req.user.role === "employee") {
+      const employeeProfile = await EmployeeProfile.findOne({ userId: req.user._id });
+      if (!employeeProfile) {
+        return res.status(404).json({ message: "Employee profile not found" });
+      }
+      userEmail = employeeProfile.companyMail;
+      const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+      if (!companyProfile) {
+        return res.status(404).json({ message: "Company profile not found" });
+      }
+      userId = companyProfile.userId;
+    }
+
+    //check for active subscription
+    const subscription = await Subscription.findOne({ user_id: userId });
+    if (!subscription || subscription.end_date < new Date()) {
+      return res.status(404).json({ message: "Subscription not found or expired" });
+    }
+
+    if (subscription && subscription.plan_name === "Free") {
+      return res.status(200).json({ message: 'You are using the free plan. Please upgrade to a paid plan to continue using advanced compliance check.' });
+    }
+
+    //check if subscription is pro or enterprise or custom
+    if (subscription.plan_name !== "Pro" && subscription.plan_name !== "Enterprise" && subscription.plan_name !== "Custom Enterprise Plan") {
+      return res.status(404).json({ message: "You are not authorized to use this feature" });
+    }
+
+    // Check for cached competitor analysis
+    const cachedAnalysis = await CompetitorAnalysisCache.findOne({ rfpId: rfpId });
+
+    if (cachedAnalysis && cachedAnalysis.expiresAt > new Date()) {
+      // Return cached result if it exists and hasn't expired
+      return res.status(200).json({
+        message: "Competitor analysis completed successfully (cached)",
+        data: cachedAnalysis.analysisData
+      });
+    }
+
+    // If no cache or cache expired, fetch new analysis
+    const resCompetitorAnalysis = await axios.post(`${process.env.PIPELINE_URL}/competitor-analysis`, { "rfp_title": rfp.title, "rfp_description": rfp.description });
+
+    // Cache the result for 1 day
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1); // Cache for 1 day
+
+    // Update or create cache entry
+    await CompetitorAnalysisCache.findOneAndUpdate(
+      { rfpId: rfpId },
+      {
+        rfpId: rfpId,
+        analysisData: resCompetitorAnalysis.data,
+        expiresAt: expiresAt
+      },
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json({ message: "Competitor analysis completed successfully", data: resCompetitorAnalysis.data });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 exports.generatePDF = async (req, res) => {
   try {
