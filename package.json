@@ -5,7 +5,11 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test:pdf": "node test-pdf-generation.js"
+    "test:pdf": "node test-pdf-generation.js",
+    "flush-logs": "node scripts/flushLogs.js",
+    "flush-logs:request": "node scripts/flushLogs.js request",
+    "flush-logs:responseTime": "node scripts/flushLogs.js responseTime",
+    "flush-logs:error": "node scripts/flushLogs.js error"
   },
   "keywords": [],
   "author": "",
@@ -43,7 +47,8 @@
     "puppeteer": "^24.17.0",
     "puppeteer-core": "^10.4.0",
     "redis": "^4.7.0",
-    "stripe": "^18.5.0"
+    "stripe": "^18.5.0",
+    "xss-clean": "^0.1.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

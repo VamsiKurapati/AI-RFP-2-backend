@@ -49,6 +49,12 @@ const {
   userCacheMiddleware
 } = require('./middleware/cacheMiddleware');
 
+// Import logging and security middlewares
+const requestLogger = require('./middleware/requestLogger');
+const responseTimeLogger = require('./middleware/responseTimeLogger');
+const xssClean = require('./middleware/xssClean');
+const errorLogger = require('./middleware/errorLogger');
+
 // Start processing email queue in background
 emailQueue.startProcessing(sendEmail);
 console.log('Email queue processor started');
@@ -159,6 +165,13 @@ app.post('/stripe/webhook', express.raw({ type: 'application/json' }), handleWeb
 app.use(helmet());
 app.use(express.json());
 
+// Security middleware - XSS protection (should be early in the chain)
+app.use(xssClean);
+
+// Logging middlewares - log requests and response times
+app.use(requestLogger);
+app.use(responseTimeLogger);
+
 // CORS Configuration - Allow all origins for file serving (OnlyOffice needs this)
 app.use((req, res, next) => {
   // For file serving endpoints, allow all origins (OnlyOffice Document Server)
@@ -213,6 +226,23 @@ app.use('/support', supportRoute);
 
 app.get('/', (req, res) => {
   res.send('Welcome to the Proposal API');
+});
+
+// Centralized error handling middleware (must be last)
+// Error logger middleware - logs errors to error.log
+app.use(errorLogger);
+
+// Final error response handler
+app.use((err, req, res, next) => {
+  // Send error response
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Internal Server Error';
+
+  res.status(statusCode).json({
+    success: false,
+    message: message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
 });
 
 // Connect to MongoDB, Redis and Start the server
