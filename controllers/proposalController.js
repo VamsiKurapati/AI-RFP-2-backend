@@ -530,10 +530,10 @@ exports.competitorAnalysis = async (req, res) => {
 
 exports.deleteDraftProposal = async (req, res) => {
   try {
-    const { proposalId } = req.body;
+    const { rfpId } = req.body;
 
-    if (!proposalId || !mongoose.Types.ObjectId.isValid(proposalId)) {
-      return res.status(400).json({ message: "Invalid proposal ID" });
+    if (!rfpId || !mongoose.Types.ObjectId.isValid(rfpId)) {
+      return res.status(400).json({ message: "Invalid RFP ID" });
     }
 
     let userEmail = req.user.email;
@@ -551,9 +551,9 @@ exports.deleteDraftProposal = async (req, res) => {
       return res.status(404).json({ message: "Company profile not found" });
     }
 
-    await DraftRFP.deleteOne({ proposalId: proposalId, userEmail: userEmail });
+    await DraftRFP.deleteOne({ rfpId: rfpId, userEmail: userEmail });
 
-    await ProposalTracker.deleteOne({ proposalId: proposalId, companyMail: userEmail });
+    await ProposalTracker.deleteOne({ rfpId: rfpId, companyMail: userEmail });
 
     return res.status(200).json({ message: "Draft proposal deleted successfully" });
   } catch (error) {

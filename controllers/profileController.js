@@ -11,7 +11,6 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { randomInt } = require("crypto");
 const multer = require("multer");
-const nodemailer = require("nodemailer");
 const Subscription = require("../models/Subscription");
 const Payment = require("../models/Payments");
 const { summarizePdfBuffer } = require("../utils/documentSummarizer");
@@ -219,7 +218,7 @@ exports.getProfile = async (req, res) => {
         const wonProposals = statusCounts["Won"] || 0;
         const lostProposals = statusCounts["Rejected"] || 0;
         const activeProposals = statusCounts["In Progress"] || 0;
-        const successRate = totalProposals === 0 ? "0.00" : ((wonProposals / (wonProposals + lostProposals)) * 100).toFixed(2);
+        const successRate = (totalProposals === 0 || wonProposals + lostProposals === 0) ? "0.00" : ((wonProposals / (wonProposals + lostProposals)) * 100).toFixed(2);
         const data_1 = {
             ...data,
             totalProposals,
@@ -381,17 +380,33 @@ exports.uploadLogo = [
 
             const logoUrl = `${req.file.id}`;
             if (user.role === "company") {
-                await CompanyProfile.findOneAndUpdate(
-                    { userId: req.user._id },
-                    { logoUrl },
-                    { new: true }
-                );
+                const companyProfile = await CompanyProfile.findOne({ userId: req.user._id });
+                const oldLogoUrl = companyProfile.logoUrl;
+                if (!companyProfile) {
+                    return res.status(404).json({ message: "Company profile not found" });
+                }
+                companyProfile.logoUrl = logoUrl;
+                if (oldLogoUrl) {
+                    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+                        bucketName: "uploads",
+                    });
+                    await bucket.delete(oldLogoUrl);
+                }
+                await companyProfile.save();
             } else if (user.role === "employee") {
-                await EmployeeProfile.findOneAndUpdate(
-                    { userId: req.user._id },
-                    { logoUrl },
-                    { new: true }
-                );
+                const employeeProfile = await EmployeeProfile.findOne({ userId: req.user._id });
+                const oldLogoUrl = employeeProfile.logoUrl;
+                if (!employeeProfile) {
+                    return res.status(404).json({ message: "Employee profile not found" });
+                }
+                employeeProfile.logoUrl = logoUrl;
+                if (oldLogoUrl) {
+                    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+                        bucketName: "uploads",
+                    });
+                    await bucket.delete(oldLogoUrl);
+                }
+                await employeeProfile.save();
             } else {
                 // Clean up uploaded file on validation failure
                 await cleanupUploadedFiles(req);
@@ -1180,6 +1195,11 @@ exports.deleteEmployee = async (req, res) => {
             return res.status(400).json({ message: "Employee ID is required" });
         }
 
+        // Validate ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(id) || id === "null" || id === "undefined") {
+            return res.status(400).json({ message: "Invalid Employee ID format" });
+        }
+
         const employeeProfile = await EmployeeProfile.findById(id);
 
         if (!employeeProfile) {
@@ -1196,7 +1216,7 @@ exports.deleteEmployee = async (req, res) => {
             return res.status(404).json({ message: "Company profile not found" });
         }
 
-        const employee = companyProfile.employees?.find(employee => employee.employeeId.toString() === id);
+        const employee = companyProfile.employees?.find(employee => employee.employeeId && employee.employeeId.toString() === id);
 
         if (!employee) {
             return res.status(404).json({ message: "Employee not found" });
@@ -1208,7 +1228,7 @@ exports.deleteEmployee = async (req, res) => {
 
         try {
             if (companyProfile.employees) {
-                companyProfile.employees = companyProfile.employees.filter(employee => employee.employeeId.toString() !== id);
+                companyProfile.employees = companyProfile.employees.filter(employee => !employee.employeeId || employee.employeeId.toString() !== id);
             }
 
             await companyProfile.save({ session });

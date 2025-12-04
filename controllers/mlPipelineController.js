@@ -614,6 +614,26 @@ exports.sendDataForProposalGeneration = async (req, res) => {
             subscription_1.current_rfp_proposal_generations++;
             await subscription_1.save({ session });
 
+            const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+            if (!companyProfile) {
+              await session.abortTransaction();
+              return res.status(400).json({ error: "Company profile not found" });
+            }
+
+            companyProfile.proposals.push({
+              title: proposal.title || "Not found",
+              company: proposal.organization || "Not found",
+              amount: parseFloat(proposal.budget),
+              status: "In Progress",
+            });
+
+            companyProfile.deadlines.push({
+              title: proposal.title || "Not found",
+              status: "In Progress",
+              dueDate: getDeadline(proposal.deadline),
+            });
+            await companyProfile.save({ session });
+
             await session.commitTransaction();
           } catch (error) {
             await session.abortTransaction();
@@ -1844,6 +1864,26 @@ exports.sendGrantDataForProposalGeneration = async (req, res) => {
             current_subscription.current_grant_proposal_generations++;
             await current_subscription.save({ session });
 
+            const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+            if (!companyProfile) {
+              await session.abortTransaction();
+              return res.status(400).json({ error: "Company profile not found" });
+            }
+
+            companyProfile.proposals.push({
+              title: grant.OPPORTUNITY_TITLE,
+              company: grant.AGENCY_NAME,
+              amount: parseFloat(grant.ESTIMATED_TOTAL_FUNDING),
+              status: "In Progress",
+            });
+
+            companyProfile.deadlines.push({
+              title: grant.OPPORTUNITY_TITLE,
+              status: "In Progress",
+              dueDate: getDeadline(grant.ESTIMATED_APPLICATION_DUE_DATE),
+            });
+            await companyProfile.save({ session });
+
             await session.commitTransaction();
           } catch (error) {
             await session.abortTransaction();
@@ -1924,6 +1964,20 @@ exports.getRFPProposal = async (req, res) => {
     }
 
     const { proposal } = req.body;
+
+    if (!proposal || !proposal.rfpId) {
+      return res.status(400).json({ error: "RFP ID is required" });
+    }
+
+    let rfp = null;
+    rfp = await RFP.findOne({ _id: proposal.rfpId });
+    if (!rfp) {
+      //Check in matched RFPs
+      rfp = await MatchedRFP.findOne({ _id: proposal.rfpId });
+    }
+    if (!rfp) {
+      return res.status(400).json({ error: "RFP not found" });
+    }
 
     let userEmail = req.user.email;
     let userId = "";
@@ -2090,6 +2144,26 @@ exports.getRFPProposal = async (req, res) => {
           current_subscription.current_rfp_proposal_generations++;
           await current_subscription.save({ session });
 
+          const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+          if (!companyProfile) {
+            await session.abortTransaction();
+            return res.status(400).json({ error: "Company profile not found" });
+          }
+
+          companyProfile.proposals.push({
+            title: rfp.title || "Not found",
+            company: rfp.organization || "Not found",
+            amount: parseFloat(rfp.budget) ? parseFloat(rfp.budget) : 0,
+            status: "In Progress",
+          });
+
+          companyProfile.deadlines.push({
+            title: rfp.title || "Not found",
+            status: "In Progress",
+            dueDate: getDeadline(rfp.deadline),
+          });
+          await companyProfile.save({ session });
+
           await session.commitTransaction();
         } catch (error) {
           await session.abortTransaction();
@@ -2116,6 +2190,15 @@ exports.getRFPProposal = async (req, res) => {
 exports.getGrantProposal = async (req, res) => {
   try {
     const { grant } = req.body;
+
+    if (!grant || (!grant.grantId && !grant._id)) {
+      return res.status(400).json({ error: "Grant ID is required" });
+    }
+
+    const grantData = await Grant.findOne({ _id: grant.grantId ? grant.grantId : grant._id });
+    if (!grantData) {
+      return res.status(400).json({ error: "Grant not found" });
+    }
 
     let userEmail = req.user.email;
     let userId = "";
@@ -2271,11 +2354,34 @@ exports.getGrantProposal = async (req, res) => {
             status: "Deadline",
           });
           await new_CalendarEvent_Deadline.save({ session });
+
           proposalTracker.status = "success";
           proposalTracker.grantProposalId = new_prop_id;
           await proposalTracker.save({ session });
+
           current_subscription.current_grant_proposal_generations++;
           await current_subscription.save({ session });
+
+          const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+          if (!companyProfile) {
+            await session.abortTransaction();
+            return res.status(400).json({ error: "Company profile not found" });
+          }
+
+          companyProfile.proposals.push({
+            title: grant.OPPORTUNITY_TITLE,
+            company: grant.AGENCY_NAME,
+            amount: grant.ESTIMATED_TOTAL_FUNDING,
+            status: "In Progress",
+          });
+
+          companyProfile.deadlines.push({
+            title: grant.OPPORTUNITY_TITLE,
+            status: "In Progress",
+            dueDate: getDeadline(grant.ESTIMATED_APPLICATION_DUE_DATE),
+          });
+          await companyProfile.save({ session });
+
           await session.commitTransaction();
         } catch (error) {
           await session.abortTransaction();

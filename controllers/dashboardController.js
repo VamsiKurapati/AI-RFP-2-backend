@@ -1005,6 +1005,16 @@ exports.deletePermanently = async (req, res) => {
             return res.status(400).json({ message: "Invalid ID format" });
         }
 
+        const proposal = await Proposal.findById(proposalId);
+        if (!proposal) {
+            return res.status(404).json({ message: "Proposal not found" });
+        }
+
+        const companyProfile = await CompanyProfile.findOne({ email: proposal.companyMail });
+        if (!companyProfile) {
+            return res.status(404).json({ message: "Company profile not found" });
+        }
+
         // Use transaction for data consistency
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -1013,6 +1023,13 @@ exports.deletePermanently = async (req, res) => {
             await Proposal.findByIdAndDelete(proposalId, { session });
             await DraftRFP.deleteOne({ proposalId: proposalId }, { session });
             await ProposalTracker.deleteOne({ proposalId: proposalId }, { session });
+
+            companyProfile.proposals = companyProfile.proposals.filter(proposal => proposal.title !== proposal.title);
+            companyProfile.deadlines = companyProfile.deadlines.filter(deadline => deadline.title !== proposal.title);
+            await companyProfile.save({ session });
+
+            //Delete the calendar events
+            await CalendarEvent.deleteMany({ proposalId: proposalId }, { session });
 
             await session.commitTransaction();
             res.status(200).json({ message: "Proposal deleted permanently" });
@@ -1038,6 +1055,17 @@ exports.deletePermanentlyGrant = async (req, res) => {
             return res.status(400).json({ message: "Invalid ID format" });
         }
 
+
+        const grantProposal = await GrantProposal.findById(proposalId);
+        if (!grantProposal) {
+            return res.status(404).json({ message: "Grant proposal not found" });
+        }
+
+        const companyProfile = await CompanyProfile.findOne({ email: grantProposal.companyMail });
+        if (!companyProfile) {
+            return res.status(404).json({ message: "Company profile not found" });
+        }
+
         // Use transaction for data consistency
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -1046,6 +1074,13 @@ exports.deletePermanentlyGrant = async (req, res) => {
             await GrantProposal.findByIdAndDelete(proposalId, { session });
             await DraftGrant.deleteOne({ grantProposalId: proposalId }, { session });
             await ProposalTracker.deleteOne({ grantProposalId: proposalId }, { session });
+
+            companyProfile.proposals = companyProfile.proposals.filter(proposal => proposal.title !== grantProposal.title);
+            companyProfile.deadlines = companyProfile.deadlines.filter(deadline => deadline.title !== grantProposal.title);
+            await companyProfile.save({ session });
+
+            //Delete the calendar events
+            await CalendarEvent.deleteMany({ grantProposalId: proposalId }, { session });
 
             await session.commitTransaction();
             res.status(200).json({ message: "Grant proposal deleted permanently" });
@@ -1119,6 +1154,24 @@ exports.updateProposal = async (req, res) => {
             }
             await proposal.save({ session });
 
+            const companyProfile = await CompanyProfile.findOne({ email: proposal.companyMail });
+            if (!companyProfile) {
+                return res.status(404).json({ message: "Company profile not found" });
+            }
+            //Find the deadline with the same title and update the status and dueDate
+            const deadline = companyProfile.deadlines.find(deadline => deadline.title === proposal.title);
+            if (deadline) {
+                deadline.status = proposal.status;
+                deadline.dueDate = proposal.deadline;
+            }
+
+            const existingProposal = companyProfile.proposals.find(proposal => proposal.title === proposal.title);
+            if (existingProposal) {
+                existingProposal.status = proposal.status;
+            }
+
+            await companyProfile.save({ session });
+
             await session.commitTransaction();
 
             await sendProposalStatusUpdateEmail(proposal, oldStatus, proposal.status);
@@ -1188,6 +1241,22 @@ exports.updateGrantProposal = async (req, res) => {
             }
             await grantProposal.save({ session });
 
+            const companyProfile = await CompanyProfile.findOne({ email: grantProposal.companyMail });
+            if (!companyProfile) {
+                return res.status(404).json({ message: "Company profile not found" });
+            }
+            //Find the deadline with the same title and update the status and dueDate
+            const deadline = companyProfile.deadlines.find(deadline => deadline.title === grantProposal.title);
+            if (deadline) {
+                deadline.status = grantProposal.status;
+                deadline.dueDate = grantProposal.deadline;
+            }
+            const existingProposal = companyProfile.proposals.find(proposal => proposal.title === grantProposal.title);
+            if (existingProposal) {
+                existingProposal.status = grantProposal.status;
+            }
+            await companyProfile.save({ session });
+
             await session.commitTransaction();
             await sendGrantProposalStatusUpdateEmail(grantProposal, oldStatus, grantProposal.status);
             res.status(200).json(grantProposal);
@@ -1206,6 +1275,10 @@ exports.updateGrantProposal = async (req, res) => {
 exports.setCollaborators = async (req, res) => {
     try {
         const { proposalId, collaboratorIds } = req.body;
+
+        if (!req.user || req.user.role !== "company") {
+            return res.status(403).json({ message: "You are not authorized to set collaborators" });
+        }
 
         if (!mongoose.Types.ObjectId.isValid(proposalId)) {
             return res.status(400).json({ message: "Invalid proposal ID format" });
@@ -1227,14 +1300,14 @@ exports.setCollaborators = async (req, res) => {
             return res.status(404).json({ message: "User not found" });
         }
 
-        // Only company role can set collaborators
-        if (user.role !== "company") {
-            return res.status(403).json({ message: "You are not authorized to set collaborators" });
-        }
-
         const proposal = await Proposal.findById(proposalId);
         if (!proposal) {
             return res.status(404).json({ message: "Proposal not found" });
+        }
+
+        const draftRFP = await DraftRFP.findOne({ proposalId: proposalId });
+        if (!draftRFP) {
+            return res.status(404).json({ message: "Draft proposal not found" });
         }
 
         // Verify company owns this proposal
@@ -1278,7 +1351,11 @@ exports.setCollaborators = async (req, res) => {
         proposal.collaborators.editors = editorIds;
         proposal.collaborators.viewers = viewerIds;
 
+        draftRFP.collaborators.editors = editorIds;
+        draftRFP.collaborators.viewers = viewerIds;
+
         await proposal.save();
+        await draftRFP.save();
 
         res.status(200).json({ message: "Collaborators updated successfully", proposal });
     } catch (error) {
@@ -1290,6 +1367,10 @@ exports.setCollaborators = async (req, res) => {
 exports.setGrantCollaborators = async (req, res) => {
     try {
         const { grantProposalId, collaboratorIds } = req.body;
+
+        if (!req.user || req.user.role !== "company") {
+            return res.status(403).json({ message: "You are not authorized to set collaborators" });
+        }
 
         if (!mongoose.Types.ObjectId.isValid(grantProposalId)) {
             return res.status(400).json({ message: "Invalid grant proposal ID format" });
@@ -1311,14 +1392,14 @@ exports.setGrantCollaborators = async (req, res) => {
             return res.status(404).json({ message: "User not found" });
         }
 
-        // Only company role can set collaborators
-        if (user.role !== "company") {
-            return res.status(403).json({ message: "You are not authorized to set collaborators" });
-        }
-
         const grantProposal = await GrantProposal.findById(grantProposalId);
         if (!grantProposal) {
             return res.status(404).json({ message: "Grant proposal not found" });
+        }
+
+        const draftGrant = await DraftGrant.findOne({ proposalId: grantProposalId });
+        if (!draftGrant) {
+            return res.status(404).json({ message: "Draft grant proposal not found" });
         }
 
         // Verify company owns this grant proposal
@@ -1362,7 +1443,11 @@ exports.setGrantCollaborators = async (req, res) => {
         grantProposal.collaborators.editors = editorIds;
         grantProposal.collaborators.viewers = viewerIds;
 
+        draftGrant.collaborators.editors = editorIds;
+        draftGrant.collaborators.viewers = viewerIds;
+
         await grantProposal.save();
+        await draftGrant.save();
 
         res.status(200).json({ message: "Collaborators updated successfully", grantProposal });
     } catch (error) {

@@ -166,6 +166,11 @@ exports.deleteExpiredProposals = async () => {
             await Promise.all(expiredProposals.map(async (proposal) => {
                 try {
                     // Delete the proposal from database
+                    const proposal = await Proposal.findById(proposal._id);
+                    const companyProfile = await CompanyProfile.findOne({ email: proposal.companyMail });
+                    if (!companyProfile) {
+                        return;
+                    }
                     await Proposal.deleteOne({ _id: proposal._id }, { session });
 
                     // Also delete the draft RFP
@@ -174,6 +179,13 @@ exports.deleteExpiredProposals = async () => {
                     // Also delete the proposal tracker
                     await ProposalTracker.deleteOne({ proposalId: proposal._id }, { session });
 
+                    // Also delete the company profile's proposal
+                    companyProfile.proposals = companyProfile.proposals.filter(p => p.title !== proposal.title);
+                    companyProfile.deadlines = companyProfile.deadlines.filter(d => d.title !== proposal.title);
+                    await companyProfile.save({ session });
+
+                    // Also delete the calendar events
+                    await CalendarEvent.deleteMany({ proposalId: proposal._id }, { session });
                 } catch (err) {
                     console.error(`Failed to delete proposal ${proposal._id}:`, err.message);
                 }
@@ -220,6 +232,11 @@ exports.deleteExpiredGrantProposals = async () => {
             // Delete each expired grant proposal and its associated files
             await Promise.all(expiredGrantProposals.map(async (grantProposal) => {
                 try {
+                    const grantProposal = await GrantProposal.findById(grantProposal._id);
+                    const companyProfile = await CompanyProfile.findOne({ email: grantProposal.companyMail });
+                    if (!companyProfile) {
+                        return;
+                    }
                     // Delete the grant proposal from database
                     await GrantProposal.deleteOne({ _id: grantProposal._id }, { session });
 
@@ -227,6 +244,14 @@ exports.deleteExpiredGrantProposals = async () => {
                     await DraftGrant.deleteOne({ grantProposalId: grantProposal._id }, { session });
                     // Also delete the proposal tracker
                     await ProposalTracker.deleteOne({ grantProposalId: grantProposal._id }, { session });
+
+                    // Also delete the company profile's proposal
+                    companyProfile.proposals = companyProfile.proposals.filter(p => p.title !== grantProposal.title);
+                    companyProfile.deadlines = companyProfile.deadlines.filter(d => d.title !== grantProposal.title);
+                    await companyProfile.save({ session });
+
+                    // Also delete the calendar events
+                    await CalendarEvent.deleteMany({ grantProposalId: grantProposal._id }, { session });
                 } catch (err) {
                     console.error(`Failed to delete grant proposal ${grantProposal._id}:`, err.message);
                 }
