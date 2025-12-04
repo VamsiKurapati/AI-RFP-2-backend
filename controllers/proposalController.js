@@ -10,6 +10,7 @@ const DraftGrant = require('../models/DraftGrant');
 const Subscription = require('../models/Subscription');
 const CompanyProfile = require('../models/CompanyProfile');
 const CompetitorAnalysisCache = require('../models/CompetitorAnalysisCache');
+const ProposalTracker = require('../models/ProposalTracker');
 
 const { decompress } = require('../utils/decompress');
 const { convertPdfToJsonFile } = require('../utils/pdfToJsonConverter');
@@ -527,49 +528,16 @@ exports.competitorAnalysis = async (req, res) => {
   }
 };
 
-exports.generatePDF = async (req, res) => {
+exports.deleteDraftProposal = async (req, res) => {
   try {
-    const { project, isCompressed } = req.body;
+    const { proposalId } = req.body;
 
-    // Input validation
-    if (!project) {
-      return res.status(400).json({ message: "project is required" });
+    if (!proposalId || !mongoose.Types.ObjectId.isValid(proposalId)) {
+      return res.status(400).json({ message: "Invalid proposal ID" });
     }
-
-    const pdf = await axios.post(`${process.env.PIPELINE_URL}/download-pdf`, { "project": project, "isCompressed": isCompressed }, { responseType: "arraybuffer" });
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="proposal.pdf"');
-    res.status(200).send(pdf.data);
-  } catch (error) {
-    await deleteGridFSFile(file.id);
-    res.status(500).json({ message: error.message, data: errorData });
-  }
-};
-
-
-exports.autoSaveProposal = async (req, res) => {
-  try {
-    const { proposalId, jsonData, isCompressed } = req.body;
-
-    // Input validation
-    if (!proposalId || !jsonData) {
-      return res.status(400).json({ message: "proposalId and jsonData are required" });
-    }
-
-    // Validate ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(proposalId)) {
-      return res.status(400).json({ message: "Invalid proposal ID format" });
-    }
-
-    // Validate user exists
-    if (!req.user) {
-      return res.status(401).json({ message: "User not authenticated" });
-    }
-
-    const decompressedProject = isCompressed ? decompress(jsonData) : jsonData;
 
     let userEmail = req.user.email;
+
     if (req.user.role === "employee") {
       const employeeProfile = await EmployeeProfile.findOne({ userId: req.user._id });
       if (!employeeProfile) {
@@ -578,50 +546,49 @@ exports.autoSaveProposal = async (req, res) => {
       userEmail = employeeProfile.companyMail;
     }
 
-    // Use transaction for data consistency
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      const new_grant_proposal = await GrantProposal.findOne({ _id: proposalId, companyMail: userEmail });
-      if (new_grant_proposal) {
-        new_grant_proposal.generatedProposal = decompressedProject;
-        await new_grant_proposal.save({ session });
-
-        const new_draft_grant = await DraftGrant.findOne({ proposalId: proposalId, userEmail: userEmail });
-        if (new_draft_grant) {
-          new_draft_grant.generatedProposal = decompressedProject;
-          await new_draft_grant.save({ session });
-        }
-
-        await session.commitTransaction();
-        return res.status(200).json({ message: 'Grant proposal saved successfully' });
-      }
-
-      const new_proposal_1 = await Proposal.findOne({ _id: proposalId, companyMail: userEmail });
-      if (new_proposal_1) {
-        new_proposal_1.generatedProposal = decompressedProject;
-        await new_proposal_1.save({ session });
-
-        const new_draft_proposal = await DraftRFP.findOne({ proposalId: proposalId, userEmail: userEmail });
-        if (new_draft_proposal) {
-          new_draft_proposal.generatedProposal = decompressedProject;
-          await new_draft_proposal.save({ session });
-        }
-
-        await session.commitTransaction();
-        return res.status(200).json({ message: 'RFP proposal saved successfully' });
-      }
-
-      await session.abortTransaction();
-      res.status(404).json({ message: 'Proposal not found' });
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+    if (!companyProfile) {
+      return res.status(404).json({ message: "Company profile not found" });
     }
 
+    await DraftRFP.deleteOne({ proposalId: proposalId, userEmail: userEmail });
+
+    await ProposalTracker.deleteOne({ proposalId: proposalId, companyMail: userEmail });
+
+    return res.status(200).json({ message: "Draft proposal deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.deleteDraftGrant = async (req, res) => {
+  try {
+    const { grantId } = req.body;
+
+    if (!grantId || !mongoose.Types.ObjectId.isValid(grantId)) {
+      return res.status(400).json({ message: "Invalid grant ID" });
+    }
+
+    let userEmail = req.user.email;
+
+    if (req.user.role === "employee") {
+      const employeeProfile = await EmployeeProfile.findOne({ userId: req.user._id });
+      if (!employeeProfile) {
+        return res.status(404).json({ message: "Employee profile not found" });
+      }
+      userEmail = employeeProfile.companyMail;
+    }
+
+    const companyProfile = await CompanyProfile.findOne({ email: userEmail });
+    if (!companyProfile) {
+      return res.status(404).json({ message: "Company profile not found" });
+    }
+
+    await DraftGrant.deleteOne({ grantId: grantId, userEmail: userEmail });
+
+    await ProposalTracker.deleteOne({ grantId: grantId, companyMail: userEmail });
+
+    return res.status(200).json({ message: "Draft grant deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

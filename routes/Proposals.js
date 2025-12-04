@@ -3,7 +3,7 @@ const router = express.Router();
 
 const verifyUser = require('../utils/verifyUser');
 
-const { basicComplianceCheckPdf, advancedComplianceCheckPdf, competitorAnalysis } = require('../controllers/proposalController');
+const { basicComplianceCheckPdf, advancedComplianceCheckPdf, competitorAnalysis, deleteDraftProposal, deleteDraftGrant } = require('../controllers/proposalController');
 
 // router.post('/basicComplianceCheck', verifyUser(["company", "Editor"]), basicComplianceCheck);
 // router.post('/advancedComplianceCheck', verifyUser(["company", "Editor"]), advancedComplianceCheck);
@@ -12,5 +12,8 @@ const { basicComplianceCheckPdf, advancedComplianceCheckPdf, competitorAnalysis 
 router.post('/basicComplianceCheckPdf', verifyUser(["company", "Editor"]), basicComplianceCheckPdf);
 router.post('/advancedComplianceCheckPdf', verifyUser(["company", "Editor"]), advancedComplianceCheckPdf);
 router.post('/competitorAnalysis', verifyUser(["company", "Editor"]), competitorAnalysis);
+
+router.post('/deleteDraftProposal', verifyUser(["company", "Editor"]), deleteDraftProposal);
+router.post('/deleteDraftGrant', verifyUser(["company", "Editor"]), deleteDraftGrant);
 
 module.exports = router;
