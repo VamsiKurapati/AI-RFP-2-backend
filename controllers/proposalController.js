@@ -146,6 +146,18 @@ exports.basicComplianceCheckPdf = [
         return res.status(404).json({ message: "Proposal not found" });
       }
 
+      if (proposal.isDeleted || (proposal.restoreBy && proposal.restoreBy < new Date())) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "Proposal is deleted or restore date is in the past" });
+      }
+
+      //Check if user is employee and editor and is a collaborator
+      if (req.user.role === "employee" &&
+        !proposal.collaborators.editors.some(editor => editor._id.toString() === req.user._id.toString())) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "You are not an editor of the proposal" });
+      }
+
       // Check if no.of attempts is greater than 3
       if (proposal && proposal.noOfAttempts <= 0) {
         await deleteGridFSFile(file.id);
@@ -290,6 +302,19 @@ exports.advancedComplianceCheckPdf = [
       if (!proposal) {
         await deleteGridFSFile(file.id);
         return res.status(404).json({ message: "Proposal not found" });
+      }
+
+
+      if (proposal.isDeleted || (proposal.restoreBy && proposal.restoreBy < new Date())) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "Proposal is deleted or restore date is in the past" });
+      }
+
+      //Check if user is employee and editor and is a collaborator
+      if (req.user.role === "employee" &&
+        !proposal.collaborators.editors.some(editor => editor._id.toString() === req.user._id.toString())) {
+        await deleteGridFSFile(file.id);
+        return res.status(404).json({ message: "You are not an editor of the proposal" });
       }
 
       // Check if no.of attempts is greater than 3
@@ -447,17 +472,13 @@ exports.advancedComplianceCheckPdf = [
 
 exports.competitorAnalysis = async (req, res) => {
   try {
-    const { rfpId } = req.body;
+    const { rfpTitle } = req.body;
 
-    if (!rfpId) {
-      return res.status(400).json({ message: "rfpId is required" });
+    if (!rfpTitle) {
+      return res.status(400).json({ message: "rfpTitle is required" });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(rfpId)) {
-      return res.status(400).json({ message: "Invalid RFP ID format" });
-    }
-
-    const rfp = await RFP.findOne({ _id: rfpId });
+    const rfp = await RFP.findOne({ title: rfpTitle });
     if (!rfp) {
       return res.status(404).json({ message: "RFP not found" });
     }
@@ -494,7 +515,7 @@ exports.competitorAnalysis = async (req, res) => {
     }
 
     // Check for cached competitor analysis
-    const cachedAnalysis = await CompetitorAnalysisCache.findOne({ rfpId: rfpId });
+    const cachedAnalysis = await CompetitorAnalysisCache.findOne({ rfpTitle: rfpTitle });
 
     if (cachedAnalysis && cachedAnalysis.expiresAt > new Date()) {
       // Return cached result if it exists and hasn't expired
@@ -504,25 +525,39 @@ exports.competitorAnalysis = async (req, res) => {
       });
     }
 
+    const payload = {
+      "rfp_title": rfp.title,
+      "rfp_description": rfp.description
+    }
+
     // If no cache or cache expired, fetch new analysis
-    const resCompetitorAnalysis = await axios.post(`${process.env.PIPELINE_URL}/competitor-analysis`, { "rfp_title": rfp.title, "rfp_description": rfp.description });
+    let resCompetitorAnalysis;
+    try {
+      const response = await axios.post(`${process.env.PIPELINE_URL}/competitor-analysis`, payload);
+      resCompetitorAnalysis = response.data;
+    } catch (error) {
+      return res.status(500).json({ message: error?.message || "Failed to fetch competitor analysis" });
+    }
 
     // Cache the result for 1 day
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 1); // Cache for 1 day
 
     // Update or create cache entry
-    await CompetitorAnalysisCache.findOneAndUpdate(
-      { rfpId: rfpId },
-      {
-        rfpId: rfpId,
-        analysisData: resCompetitorAnalysis.data,
-        expiresAt: expiresAt
-      },
-      { upsert: true, new: true }
-    );
+    //Ignore saving if report contains error key
+    if (!resCompetitorAnalysis?.report?.error) {
+      await CompetitorAnalysisCache.findOneAndUpdate(
+        { rfpTitle: rfpTitle },
+        {
+          rfpTitle: rfpTitle,
+          analysisData: resCompetitorAnalysis,
+          expiresAt: expiresAt
+        },
+        { upsert: true, new: true }
+      );
+    }
 
-    res.status(200).json({ message: "Competitor analysis completed successfully", data: resCompetitorAnalysis.data });
+    res.status(200).json({ message: "Competitor analysis completed successfully", data: resCompetitorAnalysis });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

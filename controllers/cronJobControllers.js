@@ -192,6 +192,7 @@ exports.deleteExpiredProposals = async () => {
             }));
 
             await session.commitTransaction();
+
             console.log('Expired proposals deleted successfully');
         } catch (error) {
             await session.abortTransaction();
@@ -258,6 +259,7 @@ exports.deleteExpiredGrantProposals = async () => {
             }));
 
             await session.commitTransaction();
+
             console.log('Expired grant proposals deleted successfully');
             return { message: "Expired grant proposals deleted successfully" };
         } catch (error) {
@@ -402,6 +404,7 @@ exports.updateSubscriptionStatus = async () => {
             }));
 
             await session.commitTransaction();
+
             console.log('Subscription status updated successfully');
             return { message: "Subscription status updated successfully" };
         } catch (error) {

@@ -1023,7 +1023,8 @@ exports.deactivateSubscription = async (req, res) => {
       //Update the user's subscription status to inactive
       await User.findByIdAndUpdate(userToDeactivateSubscription._id, { subscription_status: "inactive" });
 
-      await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
+      const companyProfile = await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
+
 
       //Send email to the user
       const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(userToDeactivateSubscription.fullName, userToDeactivateSubscription.email, note);
@@ -1141,7 +1142,8 @@ exports.updateUserSubscription = async (req, res) => {
       //Update the user's subscription status to active
       await User.findByIdAndUpdate(userToUpdateSubscription._id, { subscription_status: "active" });
 
-      await CompanyProfile.findOneAndUpdate({ userId: userToUpdateSubscription._id }, { status: "Active" });
+      const companyProfile = await CompanyProfile.findOneAndUpdate({ userId: userToUpdateSubscription._id }, { status: "Active" });
+
 
       //Send email to the user
       const { subject, body } = await emailTemplates.getSubscriptionUpdatedEmail(userToUpdateSubscription.fullName, subscriptionPlan.name, type, type === "Monthly" ? subscriptionPlan.monthlyPrice : subscriptionPlan.yearlyPrice, subscriptionPlan.maxEditors, subscriptionPlan.maxViewers, subscriptionPlan.maxRFPProposalGenerations, subscriptionPlan.maxGrantProposalGenerations, note);
@@ -1176,7 +1178,8 @@ exports.bulkDeactivateSubscriptions = async (req, res) => {
 
         await User.findByIdAndUpdate(userToDeactivateSubscription._id, { subscription_status: "inactive" });
 
-        await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
+        const companyProfile = await CompanyProfile.findOneAndUpdate({ userId: userToDeactivateSubscription._id }, { status: "Inactive" });
+
 
         const { subject, body } = await emailTemplates.getSubscriptionDeactivatedEmail(userToDeactivateSubscription.fullName, userToDeactivateSubscription.email, note);
         queueEmail(userToDeactivateSubscription.email, subject, body, 'subscriptionDeactivated');
@@ -1194,16 +1197,15 @@ exports.bulkDeactivateSubscriptions = async (req, res) => {
 // Create a new add-on plan (SuperAdmin only)
 exports.createAddOnPlan = async (req, res) => {
   try {
-    const { name, description, price, type, quantity, popular } = req.body;
+    const { name, description, price, quantity, popular } = req.body;
 
     // Validation
-    if (!name || !price || !type || !quantity) {
+    if (!name || !price || !quantity) {
       return res.status(400).json({
         message: "Validation error",
         errors: {
           name: name ? undefined : "Name is required",
           price: price ? undefined : "Price is required",
-          type: type ? undefined : "Type is required",
           quantity: quantity ? undefined : "Quantity is required"
         }
       });

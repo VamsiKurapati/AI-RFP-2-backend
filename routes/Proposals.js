@@ -11,7 +11,7 @@ const { basicComplianceCheckPdf, advancedComplianceCheckPdf, competitorAnalysis,
 // router.post('/autoSave', verifyUser(["company", "Editor"]), autoSaveProposal);
 router.post('/basicComplianceCheckPdf', verifyUser(["company", "Editor"]), basicComplianceCheckPdf);
 router.post('/advancedComplianceCheckPdf', verifyUser(["company", "Editor"]), advancedComplianceCheckPdf);
-router.post('/competitorAnalysis', verifyUser(["company", "Editor"]), competitorAnalysis);
+router.post('/competitor-analysis', verifyUser(["company", "Editor"]), competitorAnalysis);
 
 router.post('/deleteDraftProposal', verifyUser(["company", "Editor"]), deleteDraftProposal);
 router.post('/deleteDraftGrant', verifyUser(["company", "Editor"]), deleteDraftGrant);

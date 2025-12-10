@@ -43,11 +43,6 @@ const {
   adminLimiter
 } = require('./utils/rateLimiter');
 
-// Import cache middleware
-const {
-  publicCacheMiddleware,
-  userCacheMiddleware
-} = require('./middleware/cacheMiddleware');
 
 // Import logging and security middlewares
 const requestLogger = require('./middleware/requestLogger');
@@ -196,10 +191,10 @@ app.use(cors({
 // Apply general rate limiting to all routes
 app.use(generalLimiter);
 
-// Public endpoints with caching (GET requests)
-app.get('/getSubscriptionPlansData', publicCacheMiddleware, getSubscriptionPlansData);
+// Public endpoints
+app.get('/getSubscriptionPlansData', getSubscriptionPlansData);
 
-app.get('/getAddOnPlans', publicCacheMiddleware, getAddOnPlans);
+app.get('/getAddOnPlans', getAddOnPlans);
 
 // Contact form with specific rate limiting
 app.post('/contact', contactFormLimiter, sendEmail_contactForm);
@@ -234,6 +229,17 @@ app.use(errorLogger);
 
 // Final error response handler
 app.use((err, req, res, next) => {
+  // Ensure CORS headers are set even on error responses
+  const origin = req.headers.origin;
+  const allowedOrigins = ["http://localhost:5173", "https://ai-rfp-2-frontend.vercel.app", "https://rfp2grants.ai"];
+
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
   // Send error response
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error';

@@ -286,7 +286,7 @@ exports.login = async (req, res) => {
         // Don't fail login if email fails
       }
 
-      // user.onboarding_status = true;
+      user.onboarding_status = true;
       await user.save();
 
       return res.status(200).json({ token, user: userWithoutPassword, subscription: subscriptionData });

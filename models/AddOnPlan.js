@@ -17,8 +17,8 @@ const addOnPlanSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Add-on type is required'],
         enum: {
-            values: ['RFP Proposals Generation', 'Grant Proposal Generations', 'RFP + Grant Proposal Generations'],
-            message: 'Type must be one of: RFP Proposals Generation, Grant Proposal Generations, RFP + Grant Proposal Generations'
+            values: ['RFP Proposal Generation', 'Grant Proposal Generation', 'RFP + Grant Proposal Generation'],
+            message: 'Type must be one of: RFP Proposal Generation, Grant Proposal Generation, RFP + Grant Proposal Generation'
         }
     },
     quantity: {

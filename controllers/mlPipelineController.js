@@ -237,6 +237,7 @@ exports.getSavedAndDraftRFPs = async (req, res) => {
     const draftRFPs = await DraftRFP.find({ userEmail })
       .populate('collaborators.owner', '_id fullName email')
       .populate('collaborators.editors', '_id fullName email')
+      .populate('collaborators.viewers', '_id fullName email')
       .sort({ createdAt: -1 }).lean();
     const draftRFPs_1 = draftRFPs.map((item) => {
       return {
@@ -1484,6 +1485,7 @@ exports.saveGrant = async (req, res) => {
       grant_data: grant,
     });
     await new_SavedGrant.save();
+
     res.status(200).json({ message: "Grant saved successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1521,6 +1523,7 @@ exports.unsaveGrant = async (req, res) => {
       return res.status(404).json({ message: "Grant not found" });
     }
     await grant.deleteOne();
+
     res.status(200).json({ message: "Grant unsaved successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1626,6 +1629,7 @@ exports.getSavedAndDraftGrants = async (req, res) => {
     const draftGrants = await DraftGrant.find({ userEmail: userEmail })
       .populate('collaborators.owner', '_id fullName email')
       .populate('collaborators.editors', '_id fullName email')
+      .populate('collaborators.viewers', '_id fullName email')
       .sort({ createdAt: -1 }).lean();
     const draftGrants_1 = draftGrants.map((item) => {
       return {

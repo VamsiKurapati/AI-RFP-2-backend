@@ -1,9 +1,8 @@
 const mongoose = require('mongoose');
 
 const CompetitorAnalysisCacheSchema = new mongoose.Schema({
-    rfpId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "RFP",
+    rfpTitle: {
+        type: String,
         required: true,
         unique: true
     },

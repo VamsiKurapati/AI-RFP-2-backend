@@ -503,7 +503,7 @@ exports.updateCompanyProfile = [
                     }
                 }
 
-                const companyProfile = await CompanyProfile.findOneAndUpdate(
+                await CompanyProfile.findOneAndUpdate(
                     { userId: req.user._id },
                     { companyName, adminName, industry, location, linkedIn, website, services: parsedServices, establishedYear, numberOfEmployees, bio, awards: parsedAwards, clients: parsedClients, preferredIndustries: parsedPreferredIndustries },
                     { new: true, session }
@@ -579,6 +579,7 @@ exports.updateEmployeeProfile = [
                 }
 
                 await session.commitTransaction();
+
             } catch (error) {
                 await session.abortTransaction();
                 throw error;
@@ -775,6 +776,7 @@ exports.addEmployee = async (req, res) => {
                 }
             }
         }
+
         res.status(201).json({ message: "Employee added successfully" });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -813,6 +815,7 @@ exports.removeEmployee = async (req, res) => {
             await companyProfile_1.save({ session });
 
             await session.commitTransaction();
+
             res.status(201).json({ message: "Employee removed successfully" });
         } catch (error) {
             await session.abortTransaction();
@@ -886,6 +889,7 @@ exports.addCaseStudy = [
                 { new: true }
             );
             await companyProfile_1.save();
+
             res.status(201).json({ message: "Case study added successfully" });
         } catch (error) {
             res.status(500).json({ message: error.message });
@@ -905,6 +909,7 @@ exports.addLicenseAndCertification = async (req, res) => {
             { $push: { licensesAndCertifications: { name, issuer, validTill } } },
             { new: true }
         );
+
         res.status(201).json({ message: "License and certification added successfully" });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -1261,6 +1266,7 @@ exports.deleteEmployee = async (req, res) => {
             }
 
             await session.commitTransaction();
+
             res.status(200).json({ message: "Employee deleted successfully" });
         } catch (error) {
             await session.abortTransaction();

@@ -589,7 +589,7 @@ const activateSubscription = async (req, res) => {
 
                 refundId = refund ? refund.id : null;
 
-                const companyProfile = await CompanyProfile.findOne({ userId: userId });
+                let companyProfile = await CompanyProfile.findOne({ userId: userId });
                 const companyNameForPayment = (companyProfile && companyProfile.companyName) ? companyProfile.companyName : req.user.fullName;
 
                 await createPaymentRecord({
@@ -613,7 +613,7 @@ const activateSubscription = async (req, res) => {
                 }
             } catch (refundError) {
                 try {
-                    const companyProfile = await CompanyProfile.findOne({ userId: userId });
+                    let companyProfile = await CompanyProfile.findOne({ userId: userId });
                     const companyNameForPayment = (companyProfile && companyProfile.companyName) ? companyProfile.companyName : req.user.fullName;
 
                     await createPaymentRecord({
@@ -628,7 +628,7 @@ const activateSubscription = async (req, res) => {
                         payment_method: 'stripe',
                         failure_reason: `Database error: ${error.message}. Refund failed: ${refundError.message}`
                     });
-                    await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Inactive' });
+                    companyProfile = await CompanyProfile.findOneAndUpdate({ userId: userId }, { status: 'Inactive' });
                 } catch (innerErr) {
                     console.error('Failed to create fallback payment record after refund failure:', innerErr.message || innerErr);
                 }
@@ -858,7 +858,8 @@ const handleSubscriptionWebhook = async (event) => {
                         { session }
                     );
                     await User.findByIdAndUpdate(userId, { subscription_status: "inactive" }, { session });
-                    await CompanyProfile.findOneAndUpdate({ userId }, { status: "Past Due" }, { session });
+                    const companyProfile = await CompanyProfile.findOneAndUpdate({ userId }, { status: "Past Due" }, { session });
+
 
                     let planName = null;
                     if (!stripeSub.metadata?.planName && stripeSub.metadata?.planId) {
@@ -916,9 +917,10 @@ const handleSubscriptionWebhook = async (event) => {
                         { session }
                     );
                     await User.findByIdAndUpdate(userId, { subscription_status: "inactive" }, { session });
-                    await CompanyProfile.findOneAndUpdate({ userId }, { status: "Inactive" }, { session });
+                    const companyProfile = await CompanyProfile.findOneAndUpdate({ userId }, { status: "Inactive" }, { session });
 
                     await session.commitTransaction();
+
                 } catch (err) {
                     await session.abortTransaction();
                 } finally {
@@ -1038,6 +1040,7 @@ const activateSubscriptionFromStripe = async (stripeSub, invoice) => {
         ]);
 
         await session.commitTransaction();
+
 
         await Promise.all(
             existingSubscriptions.data.map(async (sub) => {

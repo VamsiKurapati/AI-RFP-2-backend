@@ -617,6 +617,7 @@ exports.addCalendarEvent = async (req, res) => {
                 await calendarEvent.save({ session });
 
                 await session.commitTransaction();
+
                 res.status(201).json({ message: "Calendar event added successfully", event: calendarEvent });
             } else if (user.role === "employee") {
                 const employeeProfile = await EmployeeProfile.findOne({ userId: userId });
@@ -642,6 +643,7 @@ exports.addCalendarEvent = async (req, res) => {
                 await calendarEvent.save({ session });
 
                 await session.commitTransaction();
+
                 res.status(201).json({ message: "Calendar event added successfully", event: calendarEvent });
             } else {
                 await session.abortTransaction();
@@ -660,232 +662,6 @@ exports.addCalendarEvent = async (req, res) => {
     }
 };
 
-// exports.addCollaboratorToProposal = async (req, res) => {
-//     try {
-//         const role = req.user.role;
-
-//         if (role !== "company") {
-//             return res.status(403).json({ message: "You are not authorized to add a collaborator to a proposal" });
-//         }
-
-//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
-//         if (!mongoose.Types.ObjectId.isValid(proposalId)) {
-//             return res.status(400).json({ message: "Invalid ID format" });
-//         }
-//         if (!collaboratorEmail) {
-//             return res.status(400).json({ message: "Collaborator email is required" });
-//         }
-
-//         const proposal = await Proposal.findById(proposalId);
-//         if (!proposal) {
-//             return res.status(404).json({ message: "Proposal not found" });
-//         }
-
-//         //Check if we have enough space for the new collaborator
-//         if (collaboratorType === "editor" && proposal.collaborators.editors.length >= proposal.maxEditors) {
-//             return res.status(404).json({ message: "Max editors reached" });
-//         }
-//         if (collaboratorType === "viewer" && proposal.collaborators.viewers.length >= proposal.maxViewers) {
-//             return res.status(404).json({ message: "Max viewers reached" });
-//         }
-
-//         const user = await User.findOne({ email: collaboratorEmail });
-//         const employeeProfile = await EmployeeProfile.findOne({ email: collaboratorEmail });
-
-//         if (!user && !employeeProfile) {
-//             return res.status(404).json({ message: "User or employee profile not found" });
-//         }
-
-//         if (collaboratorType === "editor") {
-//             //Check if employee is having editor access or not
-//             if (employeeProfile && employeeProfile.accessLevel !== "Editor") {
-//                 return res.status(404).json({ message: "Employee is not an editor" });
-//             }
-
-//             proposal.collaborators.editors.push(user._id);
-
-//         } else if (collaboratorType === "viewer") {
-//             //Check if employee is having viewer access or not
-//             if (employeeProfile && employeeProfile.accessLevel !== "Viewer") {
-//                 return res.status(404).json({ message: "Employee is not a viewer" });
-//             }
-
-//             proposal.collaborators.viewers.push(user._id);
-//         } else {
-//             return res.status(400).json({ message: "Invalid collaborator type" });
-//         }
-
-//         await proposal.save();
-
-//         await sendProposalCollaboratorAddedEmail(proposal, user);
-
-//         res.status(200).json({ message: "Collaborator added to proposal successfully" });
-//     }
-//     catch (error) {
-//         console.error('Collaborator addition to proposal error:', error);
-//         res.status(500).json({ message: error.message || "Server error" });
-//     }
-// };
-
-// exports.removeCollaboratorFromProposal = async (req, res) => {
-//     try {
-//         const role = req.user.role;
-//         if (role !== "company") {
-//             return res.status(403).json({ message: "You are not authorized to remove a collaborator from a proposal" });
-//         }
-
-//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
-//         if (!mongoose.Types.ObjectId.isValid(proposalId) || !collaboratorEmail || !collaboratorType) {
-//             return res.status(400).json({ message: "Invalid ID format or collaborator email or collaborator type" });
-//         }
-
-//         const proposal = await Proposal.findById(proposalId);
-//         if (!proposal) {
-//             return res.status(404).json({ message: "Proposal not found" });
-//         }
-
-//         //Check if the collaborator is a editor or viewer
-//         if (collaboratorType === "editor") {
-//             //Check if the collaborator is an editor
-//             if (!proposal.collaborators.editors.includes(collaboratorEmail)) {
-//                 return res.status(404).json({ message: "Collaborator is not an editor" });
-//             }
-//             proposal.collaborators.editors = proposal.collaborators.editors.filter(editor => editor.toString() !== collaboratorEmail);
-//         } else if (collaboratorType === "viewer") {
-//             //Check if the collaborator is a viewer
-//             if (!proposal.collaborators.viewers.includes(collaboratorEmail)) {
-//                 return res.status(404).json({ message: "Collaborator is not a viewer" });
-//             }
-//             proposal.collaborators.viewers = proposal.collaborators.viewers.filter(viewer => viewer.toString() !== collaboratorEmail);
-//         } else {
-//             return res.status(400).json({ message: "Invalid collaborator type" });
-//         }
-
-//         await proposal.save();
-
-//         await sendProposalCollaboratorRemovedEmail(proposal, collaboratorEmail);
-
-//         res.status(200).json({ message: "Collaborator removed from proposal successfully" });
-//     }
-//     catch (error) {
-//         console.error('Collaborator removal from proposal error:', error);
-//         res.status(500).json({ message: error.message || "Server error" });
-//     }
-// };
-
-// exports.addCollaboratorToGrantProposal = async (req, res) => {
-//     try {
-//         const role = req.user.role;
-
-//         if (role !== "company") {
-//             return res.status(403).json({ message: "You are not authorized to add a collaborator to a proposal" });
-//         }
-
-//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
-//         if (!mongoose.Types.ObjectId.isValid(proposalId)) {
-//             return res.status(400).json({ message: "Invalid ID format" });
-//         }
-//         if (!collaboratorEmail) {
-//             return res.status(400).json({ message: "Collaborator email is required" });
-//         }
-
-//         const grantProposal = await GrantProposal.findById(proposalId);
-//         if (!grantProposal) {
-//             return res.status(404).json({ message: "Grant proposal not found" });
-//         }
-
-//         //Check if we have enough space for the new collaborator
-//         if (collaboratorType === "editor" && grantProposal.collaborators.editors.length >= grantProposal.maxEditors) {
-//             return res.status(404).json({ message: "Max editors reached" });
-//         }
-//         if (collaboratorType === "viewer" && grantProposal.collaborators.viewers.length >= grantProposal.maxViewers) {
-//             return res.status(404).json({ message: "Max viewers reached" });
-//         }
-
-//         const user = await User.findOne({ email: collaboratorEmail });
-//         const employeeProfile = await EmployeeProfile.findOne({ email: collaboratorEmail });
-
-//         if (!user && !employeeProfile) {
-//             return res.status(404).json({ message: "User or employee profile not found" });
-//         }
-
-//         if (collaboratorType === "editor") {
-//             //Check if employee is having editor access or not
-//             if (employeeProfile && employeeProfile.accessLevel !== "Editor") {
-//                 return res.status(404).json({ message: "Employee is not an editor" });
-//             }
-
-//             grantProposal.collaborators.editors.push(user._id);
-
-//         } else if (collaboratorType === "viewer") {
-//             //Check if employee is having viewer access or not
-//             if (employeeProfile && employeeProfile.accessLevel !== "Viewer") {
-//                 return res.status(404).json({ message: "Employee is not a viewer" });
-//             }
-
-//             grantProposal.collaborators.viewers.push(user._id);
-//         } else {
-//             return res.status(400).json({ message: "Invalid collaborator type" });
-//         }
-
-//         await grantProposal.save();
-
-//         await sendGrantProposalCollaboratorAddedEmail(grantProposal, user);
-
-//         res.status(200).json({ message: "Collaborator added to grant proposal successfully" });
-//     }
-//     catch (error) {
-//         console.error('Collaborator addition to grant proposal error:', error);
-//         res.status(500).json({ message: error.message || "Server error" });
-//     }
-// };
-
-// exports.removeCollaboratorFromGrantProposal = async (req, res) => {
-//     try {
-//         const role = req.user.role;
-//         if (role !== "company") {
-//             return res.status(403).json({ message: "You are not authorized to remove a collaborator from a proposal" });
-//         }
-
-//         const { proposalId, collaboratorEmail, collaboratorType } = req.body;
-//         if (!mongoose.Types.ObjectId.isValid(proposalId) || !collaboratorEmail || !collaboratorType) {
-//             return res.status(400).json({ message: "Invalid ID format or collaborator email or collaborator type" });
-//         }
-
-//         const grantProposal = await GrantProposal.findById(proposalId);
-//         if (!grantProposal) {
-//             return res.status(404).json({ message: "Grant proposal not found" });
-//         }
-
-//         //Check if the collaborator is a editor or viewer
-//         if (collaboratorType === "editor") {
-//             //Check if the collaborator is an editor
-//             if (!grantProposal.collaborators.editors.includes(collaboratorEmail)) {
-//                 return res.status(404).json({ message: "Collaborator is not an editor" });
-//             }
-//             grantProposal.collaborators.editors = grantProposal.collaborators.editors.filter(editor => editor.toString() !== collaboratorEmail);
-//         } else if (collaboratorType === "viewer") {
-//             //Check if the collaborator is a viewer
-//             if (!grantProposal.collaborators.viewers.includes(collaboratorEmail)) {
-//                 return res.status(404).json({ message: "Collaborator is not a viewer" });
-//             }
-//             grantProposal.collaborators.viewers = grantProposal.collaborators.viewers.filter(viewer => viewer.toString() !== collaboratorEmail);
-//         } else {
-//             return res.status(400).json({ message: "Invalid collaborator type" });
-//         }
-
-//         await grantProposal.save();
-
-//         await sendGrantProposalCollaboratorRemovedEmail(grantProposal, collaboratorEmail);
-
-//         res.status(200).json({ message: "Collaborator removed from grant proposal successfully" });
-//     }
-//     catch (error) {
-//         console.error('Collaborator removal from grant proposal error:', error);
-//         res.status(500).json({ message: error.message || "Server error" });
-//     }
-// };
-
 exports.restoreProposal = async (req, res) => {
     try {
         const { proposalId } = req.body;
@@ -893,6 +669,7 @@ exports.restoreProposal = async (req, res) => {
             return res.status(400).json({ message: "Invalid ID format" });
         }
         const proposal = await Proposal.findByIdAndUpdate(proposalId, { isDeleted: false, deletedBy: null, deletedAt: null, restoreBy: null, restoredBy: req.user._id, restoredAt: new Date() }, { new: true });
+
         res.status(200).json(proposal);
     } catch (error) {
         console.error('Proposal restoration error:', error);
@@ -907,6 +684,7 @@ exports.restoreGrantProposal = async (req, res) => {
             return res.status(400).json({ message: "Invalid ID format" });
         }
         const proposal = await GrantProposal.findByIdAndUpdate(proposalId, { isDeleted: false, deletedBy: null, deletedAt: null, restoreBy: null, restoredBy: req.user._id, restoredAt: new Date() }, { new: true });
+
         res.status(200).json(proposal);
     } catch (error) {
         console.error('Grant proposal restoration error:', error);
@@ -941,6 +719,7 @@ exports.deleteProposals = async (req, res) => {
             session.endSession();
             throw err;
         }
+
         res.status(200).json({ message: "Proposals deleted successfully" });
     } catch (error) {
         console.error('Proposal deletion error:', error);
@@ -988,6 +767,7 @@ exports.deleteGrantProposals = async (req, res) => {
             session.endSession();
             throw err;
         }
+
         res.status(200).json({ message: "Grant proposals deleted successfully" });
     } catch (error) {
         console.error('Grant proposal deletion error:', error);
@@ -1032,6 +812,7 @@ exports.deletePermanently = async (req, res) => {
             await CalendarEvent.deleteMany({ proposalId: proposalId }, { session });
 
             await session.commitTransaction();
+
             res.status(200).json({ message: "Proposal deleted permanently" });
         } catch (error) {
             await session.abortTransaction();
@@ -1083,6 +864,7 @@ exports.deletePermanentlyGrant = async (req, res) => {
             await CalendarEvent.deleteMany({ grantProposalId: proposalId }, { session });
 
             await session.commitTransaction();
+
             res.status(200).json({ message: "Grant proposal deleted permanently" });
         } catch (error) {
             await session.abortTransaction();
@@ -1258,6 +1040,7 @@ exports.updateGrantProposal = async (req, res) => {
             await companyProfile.save({ session });
 
             await session.commitTransaction();
+
             await sendGrantProposalStatusUpdateEmail(grantProposal, oldStatus, grantProposal.status);
             res.status(200).json(grantProposal);
         } catch (error) {
